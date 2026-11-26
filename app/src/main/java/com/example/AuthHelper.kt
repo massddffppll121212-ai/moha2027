@@ -1,5 +1,6 @@
 package com.example
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.util.Log
@@ -48,13 +49,11 @@ fun attemptAutoSignIn(
     onAuthSuccess()
     return
   }
-  val clientId =
-    try {
-      context.getString(R.string.default_web_client_id)
-    } catch (_: Exception) {
-      onUnauthenticated()
-      return
-    }
+  val clientId = resolveDefaultWebClientId(context)
+  if (clientId.isNullOrBlank()) {
+    onUnauthenticated()
+    return
+  }
   val googleIdOption =
     GetGoogleIdOption.Builder()
       .setFilterByAuthorizedAccounts(true)
@@ -89,13 +88,11 @@ fun onGoogleSignInClicked(
   scope: CoroutineScope,
   onAuthCancelled: () -> Unit = {},
 ) {
-  val clientId =
-    try {
-      activity.getString(R.string.default_web_client_id)
-    } catch (_: Exception) {
-      onAuthError("تعذر العثور على إعداد Google Sign-In (default_web_client_id).")
-      return
-    }
+  val clientId = resolveDefaultWebClientId(activity)
+  if (clientId.isNullOrBlank()) {
+    onAuthError("تعذر العثور على إعداد Google Sign-In (default_web_client_id).")
+    return
+  }
 
   val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
   val request = GetCredentialRequest.Builder().addCredentialOption(signInOption).build()
@@ -142,4 +139,14 @@ fun signOutWithCleanup(
       }
     }
   }
+}
+
+@SuppressLint("DiscouragedApi")
+private fun resolveDefaultWebClientId(context: Context): String? {
+  val resId = context.resources.getIdentifier(
+    "default_web_client_id",
+    "string",
+    context.packageName,
+  )
+  return if (resId != 0) context.getString(resId) else null
 }
