@@ -24,7 +24,6 @@ import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ListView
-import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -34,14 +33,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import androidx.credentials.CredentialManager
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import com.google.firebase.Firebase
-import com.google.firebase.auth.FirebaseUser
-import com.google.firebase.auth.auth
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -49,15 +44,8 @@ class MainActivity : ComponentActivity() {
   private lateinit var viewModel: CallVaultViewModel
   private lateinit var callsAdapter: RecordingsAdapter
   private lateinit var voiceNotesAdapter: VoiceNotesAdapter
-  private lateinit var credentialManager: CredentialManager
 
-  private lateinit var authGateContainer: LinearLayout
-  private lateinit var vaultContentContainer: LinearLayout
-  private lateinit var btnGoogleSignIn: Button
-  private lateinit var authLoading: ProgressBar
-  private lateinit var tvAuthError: TextView
   private lateinit var tvAppSubtitle: TextView
-  private lateinit var btnSignOut: ImageButton
 
   private lateinit var tabCalls: TextView
   private lateinit var tabVoiceNotes: TextView
@@ -84,7 +72,6 @@ class MainActivity : ComponentActivity() {
   private lateinit var playbackWaveform: AudioWaveformProgressView
 
   private var hasAutoRequestedPermissions = false
-  private var hasAttemptedAutoSignIn = false
   private var isUserSeeking = false
 
   private val requiredPermissions: Array<String> by lazy {
@@ -113,14 +100,14 @@ class MainActivity : ComponentActivity() {
     )
     setContentView(R.layout.activity_main)
 
-    credentialManager = CredentialManager.create(this)
     viewModel =
       ViewModelProvider(this, CallVaultViewModel.provideFactory())[CallVaultViewModel::class.java]
 
     bindViews()
     applyWindowInsets()
     setupInteractions()
-    observeAuthAndState()
+    observeState()
+    requestCorePermissionsIfNeeded()
   }
 
   override fun onResume() {
@@ -131,13 +118,8 @@ class MainActivity : ComponentActivity() {
   }
 
   private fun bindViews() {
-    authGateContainer = findViewById(R.id.auth_gate_container)
-    vaultContentContainer = findViewById(R.id.vault_content_container)
-    btnGoogleSignIn = findViewById(R.id.btn_google_sign_in)
-    authLoading = findViewById(R.id.auth_loading)
-    tvAuthError = findViewById(R.id.tv_auth_error)
     tvAppSubtitle = findViewById(R.id.tv_app_subtitle)
-    btnSignOut = findViewById(R.id.btn_sign_out)
+    tvAppSubtitle.text = "DonkeyEar Recorder"
 
     tabCalls = findViewById(R.id.tab_calls)
     tabVoiceNotes = findViewById(R.id.tab_voice_notes)
@@ -194,36 +176,6 @@ class MainActivity : ComponentActivity() {
   }
 
   private fun setupInteractions() {
-    btnGoogleSignIn.setOnClickListener {
-      setAuthLoading(true)
-      tvAuthError.visibility = View.GONE
-      onGoogleSignInClicked(
-        activity = this,
-        credentialManager = credentialManager,
-        onAuthSuccess = { setAuthLoading(false) },
-        onAuthError = { message ->
-          setAuthLoading(false)
-          tvAuthError.text = message
-          tvAuthError.visibility = View.VISIBLE
-        },
-        scope = lifecycleScope,
-        onAuthCancelled = { setAuthLoading(false) },
-      )
-    }
-
-    btnSignOut.setOnClickListener {
-      signOutWithCleanup(
-        credentialManager = credentialManager,
-        scope = lifecycleScope,
-        beforeSignOut = { viewModel.bindUserSession(null) },
-        onSignOutComplete = {
-          runOnUiThread {
-            Toast.makeText(this, "تم تسجيل الخروج بنجاح.", Toast.LENGTH_SHORT).show()
-          }
-        },
-      )
-    }
-
     tabCalls.setOnClickListener { viewModel.setSection(VaultSection.CALLS) }
     tabVoiceNotes.setOnClickListener { viewModel.setSection(VaultSection.VOICE_NOTES) }
 
@@ -304,57 +256,19 @@ class MainActivity : ComponentActivity() {
     )
   }
 
-  private fun setAuthLoading(loading: Boolean) {
-    authLoading.visibility = if (loading) View.VISIBLE else View.GONE
-    btnGoogleSignIn.isEnabled = !loading
-  }
-
-  private fun observeAuthAndState() {
-    lifecycleScope.launch {
-      repeatOnLifecycle(Lifecycle.State.STARTED) {
-        launch {
-          Firebase.auth.authStateFlow().collect { user ->
-            renderAuthSession(user)
-          }
-        }
-        launch {
-          viewModel.uiState.collect { state ->
-            renderState(state)
-          }
-        }
-      }
+  private fun requestCorePermissionsIfNeeded() {
+    if (!hasAutoRequestedPermissions && !viewModel.uiState.value.permissions.allCoreGranted) {
+      hasAutoRequestedPermissions = true
+      permissionLauncher.launch(requiredPermissions)
     }
   }
 
-  private fun renderAuthSession(user: FirebaseUser?) {
-    if (user == null) {
-      viewModel.bindUserSession(null)
-      authGateContainer.visibility = View.VISIBLE
-      vaultContentContainer.visibility = View.GONE
-      if (!hasAttemptedAutoSignIn) {
-        hasAttemptedAutoSignIn = true
-        setAuthLoading(true)
-        attemptAutoSignIn(
-          context = this,
-          credentialManager = credentialManager,
-          onAuthSuccess = { setAuthLoading(false) },
-          onUnauthenticated = { setAuthLoading(false) },
-          scope = lifecycleScope,
-        )
-      }
-    } else {
-      authGateContainer.visibility = View.GONE
-      vaultContentContainer.visibility = View.VISIBLE
-      tvAuthError.visibility = View.GONE
-      setAuthLoading(false)
-      val accountLabel = user.email?.takeIf { it.isNotBlank() }
-      tvAppSubtitle.text =
-        if (accountLabel != null) "DonkeyEar Recorder • $accountLabel" else "DonkeyEar Recorder"
-      viewModel.bindUserSession(user.uid)
-
-      if (!hasAutoRequestedPermissions && !viewModel.uiState.value.permissions.allCoreGranted) {
-        hasAutoRequestedPermissions = true
-        permissionLauncher.launch(requiredPermissions)
+  private fun observeState() {
+    lifecycleScope.launch {
+      repeatOnLifecycle(Lifecycle.State.STARTED) {
+        viewModel.uiState.collect { state ->
+          renderState(state)
+        }
       }
     }
   }
@@ -423,35 +337,14 @@ class MainActivity : ComponentActivity() {
     } else {
       btnGrantPermissions.visibility = View.GONE
       val autoRecordEnabled = CallVaultSettings.isAutoCallRecordingEnabled(this)
-      val autoUploadEnabled = CallVaultSettings.isCallsAutoUploadFirebaseEnabled(this)
       val quality = CallVaultSettings.getCallRecordingQuality(this)
-      val uploadLabel = if (autoUploadEnabled) "Firebase مفعّل" else "محلي فقط"
-
-      when (val upload = state.uploadState) {
-        is CloudUploadState.Uploading -> {
-          if (upload.folder == VaultStorageFolder.CALLS) {
-            tvStatusTitle.text = "جاري رفع المكالمة إلى Firebase Storage..."
-            tvStatusSubtitle.text = "${upload.fileName} • ${upload.progressPercent}%"
-          } else {
-            tvStatusTitle.text =
-              if (autoRecordEnabled) {
-                "مسجل المكالمات التلقائي مفعّل (${state.calls.size})"
-              } else {
-                "التسجيل التلقائي للمكالمات متوقف (${state.calls.size})"
-              }
-            tvStatusSubtitle.text = "${quality.arabicLabel} • $uploadLabel"
-          }
+      tvStatusTitle.text =
+        if (autoRecordEnabled) {
+          "مسجل المكالمات التلقائي مفعّل (${state.calls.size})"
+        } else {
+          "التسجيل التلقائي للمكالمات متوقف (${state.calls.size})"
         }
-        else -> {
-          tvStatusTitle.text =
-            if (autoRecordEnabled) {
-              "مسجل المكالمات التلقائي مفعّل (${state.calls.size})"
-            } else {
-              "التسجيل التلقائي للمكالمات متوقف (${state.calls.size})"
-            }
-          tvStatusSubtitle.text = "${quality.arabicLabel} • $uploadLabel • calls"
-        }
-      }
+      tvStatusSubtitle.text = "${quality.arabicLabel} • حفظ محلي في CallVault/Calls"
     }
 
     updatePillStyle(filterAll, state.selectedFilter == CallDirection.ALL)
@@ -500,25 +393,11 @@ class MainActivity : ComponentActivity() {
     listRecordings.visibility = View.GONE
     btnGrantPermissions.visibility = View.GONE
 
-    val storageTarget = CallVaultSettings.getVoiceStorageTarget(this)
     val transcriptionEnabled = CallVaultSettings.isVoiceTranscriptionEnabled(this)
     val transcriptionLabel = if (transcriptionEnabled) "التفريغ النصي مفعّل" else "التفريغ النصي متوقف"
 
-    when (val upload = state.uploadState) {
-      is CloudUploadState.Uploading -> {
-        if (upload.folder == VaultStorageFolder.VOICE_NOTES) {
-          tvStatusTitle.text = "جاري رفع التسجيل الصوتي إلى Storage..."
-          tvStatusSubtitle.text = "${upload.fileName} • ${upload.progressPercent}%"
-        } else {
-          tvStatusTitle.text = "التسجيلات الصوتية اليدوية (${state.voiceNotes.size})"
-          tvStatusSubtitle.text = "${storageTarget.arabicLabel} • $transcriptionLabel"
-        }
-      }
-      else -> {
-        tvStatusTitle.text = "التسجيلات الصوتية اليدوية (${state.voiceNotes.size})"
-        tvStatusSubtitle.text = "${storageTarget.arabicLabel} • $transcriptionLabel"
-      }
-    }
+    tvStatusTitle.text = "التسجيلات الصوتية اليدوية (${state.voiceNotes.size})"
+    tvStatusSubtitle.text = "حفظ محلي في CallVault/VoiceNotes • $transcriptionLabel"
 
     val query = state.searchQuery.trim()
     val filteredNotes =
@@ -588,7 +467,7 @@ class MainActivity : ComponentActivity() {
       cachedTranscript = existing?.transcript,
       cachedSummary = existing?.summaryPoints.orEmpty(),
       cachedTasks = existing?.actionItems.orEmpty(),
-      cachedNotice = "تم التحميل من مجموعة calls في Firestore",
+      cachedNotice = "تم التحميل من السجل المحلي للمكالمات",
       runTranscription = { helper ->
         helper.transcribeAndSaveCall(this@MainActivity, item, viewModel.repository)
       },
@@ -608,7 +487,7 @@ class MainActivity : ComponentActivity() {
       cachedTranscript = existing?.transcript,
       cachedSummary = existing?.summaryPoints.orEmpty(),
       cachedTasks = existing?.actionItems.orEmpty(),
-      cachedNotice = "تم التحميل من مجموعة voice_notes في Firestore",
+      cachedNotice = "تم التحميل من السجل المحلي للتسجيلات الصوتية",
       runTranscription = { helper ->
         helper.transcribeAndSaveVoiceNote(this@MainActivity, note, viewModel.repository)
       },

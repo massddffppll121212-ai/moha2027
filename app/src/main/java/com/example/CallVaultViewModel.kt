@@ -17,17 +17,13 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.FirebaseFirestoreException
 import java.io.File
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -54,7 +50,6 @@ data class CallVaultUiState(
   val isCallRecording: Boolean = false,
   val activeCallSource: String? = null,
   val callRecordingElapsedSeconds: Long = 0L,
-  val uploadState: CloudUploadState = CloudUploadState.Idle,
   val playingItemId: String? = null,
   val playingLabel: String? = null,
   val expandedItemId: String? = null,
@@ -67,7 +62,7 @@ data class CallVaultUiState(
 
 class CallVaultViewModel(
   private val appContext: Context,
-  val repository: FirebaseCallVaultRepository,
+  val repository: LocalCallVaultRepository,
 ) : ViewModel() {
 
   private val _uiState = MutableStateFlow(CallVaultUiState())
@@ -78,89 +73,26 @@ class CallVaultViewModel(
   private var waveformExtractionJob: Job? = null
   private val waveformCache = mutableMapOf<String, List<Float>>()
   private var callRecordingTickerJob: Job? = null
-  private var firestoreCallsJob: Job? = null
-  private var firestoreNotesJob: Job? = null
-  private var boundUserId: String? = null
 
   init {
     refreshPermissions()
+    observeLocalTranscriptions()
     loadAllSections()
     observeServices()
   }
 
-  fun bindUserSession(userId: String?) {
-    if (userId.isNullOrBlank()) {
-      firestoreCallsJob?.cancel()
-      firestoreNotesJob?.cancel()
-      firestoreCallsJob = null
-      firestoreNotesJob = null
-      boundUserId = null
-      _uiState.update { it.copy(savedCalls = emptyMap(), savedVoiceNotes = emptyMap()) }
-      return
-    }
-    if (
-      boundUserId == userId &&
-        firestoreCallsJob?.isActive == true &&
-        firestoreNotesJob?.isActive == true
-    ) {
-      return
-    }
-
-    firestoreCallsJob?.cancel()
-    firestoreNotesJob?.cancel()
-    boundUserId = userId
-
-    firestoreCallsJob =
-      viewModelScope.launch {
-        repository
-          .observeCalls(userId)
-          .catch { error ->
-            val firestoreError =
-              generateSequence(error) { it.cause }
-                .filterIsInstance<FirebaseFirestoreException>()
-                .firstOrNull()
-            if (firestoreError == null && error is CancellationException) throw error
-            val rootError = firestoreError ?: error
-            Log.w(TAG, "Error observing Firestore calls", rootError)
-            _uiState.update {
-              it.copy(
-                statusMessage =
-                  "تعذر مزامنة المكالمات من Firestore: ${rootError.localizedMessage ?: "خطأ غير معروف"}"
-              )
-            }
-          }
-          .collect { records ->
-            val map = records.associateBy { it.fileName }
-            _uiState.update { it.copy(savedCalls = map) }
-          }
+  private fun observeLocalTranscriptions() {
+    viewModelScope.launch {
+      repository.callsFlow.collect { map ->
+        _uiState.update { it.copy(savedCalls = map) }
       }
-
-    firestoreNotesJob =
-      viewModelScope.launch {
-        repository
-          .observeVoiceNotes(userId)
-          .catch { error ->
-            val firestoreError =
-              generateSequence(error) { it.cause }
-                .filterIsInstance<FirebaseFirestoreException>()
-                .firstOrNull()
-            if (firestoreError == null && error is CancellationException) throw error
-            val rootError = firestoreError ?: error
-            Log.w(TAG, "Error observing Firestore voice_notes", rootError)
-            _uiState.update {
-              it.copy(
-                statusMessage =
-                  "تعذر مزامنة التسجيلات الصوتية من Firestore: ${rootError.localizedMessage ?: "خطأ غير معروف"}"
-              )
-            }
-          }
-          .collect { records ->
-            val map = records.associateBy { it.fileName }
-            _uiState.update { it.copy(savedVoiceNotes = map) }
-            // تحديث عناوين التسجيلات الصوتية إذا وُجدت في Firestore
-            loadVoiceNotesOnly()
-          }
+    }
+    viewModelScope.launch {
+      repository.voiceNotesFlow.collect { map ->
+        _uiState.update { it.copy(savedVoiceNotes = map) }
+        loadVoiceNotesOnly()
       }
+    }
   }
 
   private fun observeServices() {
@@ -219,20 +151,6 @@ class CallVaultViewModel(
       VoiceRecorderService.lastErrorFlow.collect { errorMsg ->
         if (!errorMsg.isNullOrBlank()) {
           _uiState.update { it.copy(statusMessage = errorMsg) }
-        }
-      }
-    }
-
-    viewModelScope.launch {
-      FirebaseStorageUploader.uploadStateFlow.collect { uploadState ->
-        _uiState.update { it.copy(uploadState = uploadState) }
-        if (uploadState is CloudUploadState.Success) {
-          _uiState.update {
-            it.copy(
-              statusMessage =
-                "تم رفع ${uploadState.metadata.fileName} تلقائياً إلى Firebase Storage."
-            )
-          }
         }
       }
     }
@@ -442,7 +360,7 @@ class CallVaultViewModel(
           false
         }
 
-      if (deleted && !boundUserId.isNullOrBlank() && _uiState.value.savedCalls.containsKey(item.fileName)) {
+      if (deleted) {
         repository.deleteCallRecord(item.fileName)
       }
 
@@ -472,11 +390,7 @@ class CallVaultViewModel(
           false
         }
 
-      if (
-        deleted &&
-          !boundUserId.isNullOrBlank() &&
-          _uiState.value.savedVoiceNotes.containsKey(note.fileName)
-      ) {
+      if (deleted) {
         repository.deleteVoiceNoteRecord(note.fileName)
       }
 
@@ -536,8 +450,6 @@ class CallVaultViewModel(
   }
 
   override fun onCleared() {
-    firestoreCallsJob?.cancel()
-    firestoreNotesJob?.cancel()
     stopPlayback()
     callRecordingTickerJob?.cancel()
     super.onCleared()
@@ -827,19 +739,15 @@ class CallVaultViewModel(
   }
 
   companion object {
-    private const val TAG = "CallVaultViewModel"
-
     fun provideFactory(): ViewModelProvider.Factory = viewModelFactory {
       initializer {
         val app =
           checkNotNull(this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY]) {
             "APPLICATION_KEY missing from CreationExtras"
           }
-        val databaseId = app.getString(R.string.firestore_database_id)
-        val db = FirebaseFirestore.getInstance(databaseId)
         CallVaultViewModel(
           appContext = app.applicationContext,
-          repository = FirebaseCallVaultRepository(db),
+          repository = LocalCallVaultRepository(app.applicationContext),
         )
       }
     }

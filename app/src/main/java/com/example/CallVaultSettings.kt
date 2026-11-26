@@ -28,39 +28,12 @@ enum class CallRecordingQuality(
   }
 }
 
-enum class VoiceStorageTarget(
-  val storageValue: String,
-  val arabicLabel: String,
-) {
-  PHONE_ONLY(
-    storageValue = "PHONE_ONLY",
-    arabicLabel = "الهاتف فقط",
-  ),
-  PHONE_AND_FIREBASE(
-    storageValue = "PHONE_AND_FIREBASE",
-    arabicLabel = "الهاتف + Firebase",
-  );
-
-  companion object {
-    fun fromStorage(raw: String?): VoiceStorageTarget {
-      return if (raw.equals(PHONE_ONLY.storageValue, ignoreCase = true)) {
-        PHONE_ONLY
-      } else {
-        PHONE_AND_FIREBASE
-      }
-    }
-  }
-}
-
 object CallVaultSettings {
   private const val PREFS_NAME = "callvault_app_settings"
 
   private const val KEY_AUTO_CALL_RECORDING = "calls_auto_recording"
-  private const val KEY_CALLS_AUTO_UPLOAD_FIREBASE = "calls_auto_upload_firebase"
   private const val KEY_CALL_RECORDING_QUALITY = "calls_recording_quality"
-
   private const val KEY_VOICE_TRANSCRIPTION_ENABLED = "voice_transcription_enabled"
-  private const val KEY_VOICE_STORAGE_TARGET = "voice_storage_target"
 
   private fun prefs(context: Context) =
     context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -73,14 +46,6 @@ object CallVaultSettings {
 
   fun setAutoCallRecordingEnabled(context: Context, enabled: Boolean) {
     prefs(context).edit().putBoolean(KEY_AUTO_CALL_RECORDING, enabled).apply()
-  }
-
-  fun isCallsAutoUploadFirebaseEnabled(context: Context): Boolean {
-    return prefs(context).getBoolean(KEY_CALLS_AUTO_UPLOAD_FIREBASE, true)
-  }
-
-  fun setCallsAutoUploadFirebaseEnabled(context: Context, enabled: Boolean) {
-    prefs(context).edit().putBoolean(KEY_CALLS_AUTO_UPLOAD_FIREBASE, enabled).apply()
   }
 
   fun getCallRecordingQuality(context: Context): CallRecordingQuality {
@@ -100,16 +65,5 @@ object CallVaultSettings {
 
   fun setVoiceTranscriptionEnabled(context: Context, enabled: Boolean) {
     prefs(context).edit().putBoolean(KEY_VOICE_TRANSCRIPTION_ENABLED, enabled).apply()
-  }
-
-  fun getVoiceStorageTarget(context: Context): VoiceStorageTarget {
-    val raw =
-      prefs(context)
-        .getString(KEY_VOICE_STORAGE_TARGET, VoiceStorageTarget.PHONE_AND_FIREBASE.storageValue)
-    return VoiceStorageTarget.fromStorage(raw)
-  }
-
-  fun setVoiceStorageTarget(context: Context, target: VoiceStorageTarget) {
-    prefs(context).edit().putString(KEY_VOICE_STORAGE_TARGET, target.storageValue).apply()
   }
 }

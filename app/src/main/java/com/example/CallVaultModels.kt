@@ -1,11 +1,6 @@
 package com.example
 
 import android.net.Uri
-import androidx.annotation.Keep
-import com.google.firebase.Timestamp
-import com.google.firebase.firestore.DocumentId
-import com.google.firebase.firestore.IgnoreExtraProperties
-import kotlin.math.absoluteValue
 
 enum class VaultSection {
   CALLS,
@@ -53,11 +48,8 @@ data class VoiceNoteItem(
   val legacyFilePath: String? = null,
 )
 
-@Keep
-@IgnoreExtraProperties
 data class CallRecord(
-  @DocumentId val id: String = "",
-  val userId: String = "",
+  val id: String = "",
   val fileName: String = "",
   val callerName: String = "",
   val phoneNumber: String = "",
@@ -67,17 +59,10 @@ data class CallRecord(
   val transcript: String? = null,
   val summaryPoints: List<String>? = null,
   val actionItems: List<String>? = null,
-  val storagePath: String? = null,
-  val storageDownloadUrl: String? = null,
-  val createdAt: Timestamp? = null,
-  val updatedAt: Timestamp? = null,
 )
 
-@Keep
-@IgnoreExtraProperties
 data class VoiceNoteRecord(
-  @DocumentId val id: String = "",
-  val userId: String = "",
+  val id: String = "",
   val fileName: String = "",
   val title: String = "",
   val durationMs: Long = 0L,
@@ -85,15 +70,4 @@ data class VoiceNoteRecord(
   val transcript: String? = null,
   val summaryPoints: List<String>? = null,
   val actionItems: List<String>? = null,
-  val storagePath: String? = null,
-  val storageDownloadUrl: String? = null,
-  val createdAt: Timestamp? = null,
-  val updatedAt: Timestamp? = null,
 )
-
-fun buildUserScopedDocId(userId: String, fileName: String): String {
-  val safeUid = userId.replace(Regex("[^a-zA-Z0-9_\\-]"), "_").take(36)
-  val safeFile = fileName.replace(Regex("[^a-zA-Z0-9_\\-]"), "_").trim('_').take(80)
-  val combined = "${safeUid}_$safeFile".trim('_')
-  return combined.ifBlank { "doc_${(userId + fileName).hashCode().absoluteValue}" }.take(120)
-}

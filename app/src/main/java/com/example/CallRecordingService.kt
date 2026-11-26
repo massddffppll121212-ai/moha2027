@@ -22,22 +22,13 @@ import android.provider.MediaStore
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
-import com.google.firebase.Firebase
-import com.google.firebase.auth.auth
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.concurrent.atomic.AtomicInteger
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 
 class CallRecordingService : Service() {
 
@@ -48,9 +39,6 @@ class CallRecordingService : Service() {
   private var activePhoneNumber: String? = null
   private var recordingStartedAtMs: Long = 0L
   private var isStopping = false
-
-  private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-  private val activeUploads = AtomicInteger(0)
 
   override fun onCreate() {
     super.onCreate()
@@ -81,9 +69,7 @@ class CallRecordingService : Service() {
         PackageManager.PERMISSION_GRANTED
     if (!hasMicPermission) {
       _lastErrorFlow.value = "صلاحية الميكروفون مطلوبة لتسجيل المكالمات."
-      if (activeUploads.get() == 0) {
-        stopSelf()
-      }
+      stopSelf()
       return
     }
 
@@ -108,9 +94,7 @@ class CallRecordingService : Service() {
     } catch (securityException: SecurityException) {
       Log.e(TAG, "Failed to start foreground microphone service", securityException)
       _lastErrorFlow.value = securityException.message ?: "تعذر بدء خدمة تسجيل المكالمات."
-      if (activeUploads.get() == 0) {
-        stopSelf()
-      }
+      stopSelf()
       return
     }
 
@@ -172,10 +156,8 @@ class CallRecordingService : Service() {
       tempOutputFile = null
       targetFileName = null
       _lastErrorFlow.value = "تعذر تشغيل أي مصدر صوت لتسجيل المكالمة."
-      if (activeUploads.get() == 0) {
-        stopForegroundCompat()
-        stopSelf()
-      }
+      stopForegroundCompat()
+      stopSelf()
       return
     }
 
@@ -221,7 +203,6 @@ class CallRecordingService : Service() {
     val tempFile = tempOutputFile
     val fileName = targetFileName
     val directionCopy = activeDirection
-    val phoneCopy = activePhoneNumber
     val startedAt = recordingStartedAtMs
     tempOutputFile = null
     targetFileName = null
@@ -231,13 +212,12 @@ class CallRecordingService : Service() {
     val hasValidAudio =
       recordedSuccessfully && tempFile != null && tempFile.exists() && tempFile.length() > 0L && fileName != null
 
-    var savedUri: Uri? = null
-    var durationMs = 0L
     if (hasValidAudio) {
-      durationMs =
-        extractDurationMs(tempFile).takeIf { it > 0L }
-          ?: (System.currentTimeMillis() - startedAt).coerceAtLeast(0L)
-      savedUri = saveToCallsFolder(sourceFile = tempFile, fileName = fileName)
+      saveToCallsFolder(sourceFile = tempFile, fileName = fileName)
+    }
+
+    if (tempFile != null && tempFile.exists()) {
+      tempFile.delete()
     }
 
     _isRecordingFlow.value = false
@@ -246,102 +226,8 @@ class CallRecordingService : Service() {
     _recordingsVersionFlow.value = _recordingsVersionFlow.value + 1
     isStopping = false
 
-    val currentUser = Firebase.auth.currentUser
-    val shouldAutoUploadFirebase = CallVaultSettings.isCallsAutoUploadFirebaseEnabled(this)
-    if (
-      hasValidAudio &&
-        shouldAutoUploadFirebase &&
-        currentUser != null &&
-        currentUser.uid.isNotBlank()
-    ) {
-      val callDirection =
-        if (directionCopy.equals("Incoming", ignoreCase = true)) {
-          CallDirection.INCOMING
-        } else {
-          CallDirection.OUTGOING
-        }
-      val cleanPhone = phoneCopy?.takeIf { it.isNotBlank() } ?: "رقم غير معروف"
-      val callerName =
-        phoneCopy?.let { lookupCallerName(it) }
-          ?: if (callDirection == CallDirection.INCOMING) "متصل وارد" else "اتصال صادر"
-
-      val callItem =
-        CallRecordingItem(
-          id = buildUserScopedDocId(currentUser.uid, fileName),
-          uri = savedUri ?: Uri.fromFile(tempFile),
-          fileName = fileName,
-          callerName = callerName,
-          phoneNumber = cleanPhone,
-          direction = callDirection,
-          timestampMs = startedAt.takeIf { it > 0L } ?: System.currentTimeMillis(),
-          durationMs = durationMs,
-          sizeBytes = tempFile.length(),
-        )
-
-      syncCallToCloud(sourceFile = tempFile, callItem = callItem)
-    } else {
-      if (tempFile != null && tempFile.exists()) {
-        tempFile.delete()
-      }
-      if (activeUploads.get() == 0) {
-        stopForegroundCompat()
-        stopSelf()
-      }
-    }
-  }
-
-  private fun syncCallToCloud(sourceFile: File, callItem: CallRecordingItem) {
-    activeUploads.incrementAndGet()
-    val uploadingNotification =
-      buildNotification(
-        title = "DonkeyEar · مزامنة المكالمة",
-        text = "حفظ ${callItem.fileName} في Firestore و Storage...",
-        includeStopAction = false,
-      )
-    val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-    manager.notify(NOTIFICATION_ID, uploadingNotification)
-
-    serviceScope.launch {
-      try {
-        val repo = FirebaseCallVaultRepository(applicationContext)
-        repo.saveCallRecord(recording = callItem)
-
-        val uploadResult =
-          withTimeoutOrNull(UPLOAD_TIMEOUT_MS) {
-            FirebaseStorageUploader.uploadRecordingFile(
-              context = applicationContext,
-              folder = VaultStorageFolder.CALLS,
-              fileName = callItem.fileName,
-              sourceFile = sourceFile,
-            )
-          }
-
-        if (uploadResult == null) {
-          _lastErrorFlow.value = "انتهت مهلة رفع المكالمة إلى Firebase Storage."
-        } else {
-          uploadResult
-            .onSuccess { uploaded ->
-              repo.saveCallRecord(
-                recording = callItem,
-                storagePath = uploaded.storagePath,
-                storageDownloadUrl = uploaded.downloadUrl,
-              )
-            }
-            .onFailure { error ->
-              _lastErrorFlow.value = error.message
-            }
-        }
-      } finally {
-        if (sourceFile.exists()) {
-          sourceFile.delete()
-        }
-        val remaining = activeUploads.decrementAndGet()
-        if (remaining <= 0 && !_isRecordingFlow.value) {
-          stopForegroundCompat()
-          stopSelf()
-        }
-      }
-    }
+    stopForegroundCompat()
+    stopSelf()
   }
 
   private fun saveToCallsFolder(sourceFile: File, fileName: String): Uri {
@@ -521,7 +407,6 @@ class CallRecordingService : Service() {
     if (_isRecordingFlow.value || mediaRecorder != null) {
       stopRecordingAndFinish()
     }
-    serviceScope.cancel()
     super.onDestroy()
   }
 
@@ -529,7 +414,6 @@ class CallRecordingService : Service() {
     private const val TAG = "CallRecordingService"
     private const val CHANNEL_ID = "callvault_recording_channel"
     private const val NOTIFICATION_ID = 4041
-    private const val UPLOAD_TIMEOUT_MS = 180_000L
 
     const val ACTION_START_RECORDING = "com.example.action.START_RECORDING"
     const val ACTION_STOP_RECORDING = "com.example.action.STOP_RECORDING"

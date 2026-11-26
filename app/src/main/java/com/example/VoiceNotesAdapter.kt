@@ -64,36 +64,14 @@ class VoiceNotesAdapter(
     tvDuration.text = formatDuration(note.durationMs)
     tvTimestamp.text = formatTimestamp(note.timestampMs)
 
-    val cloudNote = savedNotes[note.fileName]
-    val uploadedLocal =
-      FirebaseStorageUploader.getUploadedInfo(
-        parent.context,
-        VaultStorageFolder.VOICE_NOTES,
-        note.fileName,
-      )
-    val hasTranscript = !cloudNote?.transcript.isNullOrBlank()
-    val hasStorage = !cloudNote?.storageDownloadUrl.isNullOrBlank() || uploadedLocal != null
+    val savedNote = savedNotes[note.fileName]
+    val hasTranscript = !savedNote?.transcript.isNullOrBlank()
 
-    when {
-      hasTranscript && hasStorage -> {
-        tvCloudBadge.visibility = View.VISIBLE
-        tvCloudBadge.text = "✓ مفرّغ في voice_notes ومرفوع في Storage"
-      }
-      hasTranscript -> {
-        tvCloudBadge.visibility = View.VISIBLE
-        tvCloudBadge.text = "✓ مفرّغ في Firestore (voice_notes)"
-      }
-      hasStorage -> {
-        tvCloudBadge.visibility = View.VISIBLE
-        tvCloudBadge.text = "☁️ محفوظ في voice_notes و Storage"
-      }
-      cloudNote != null -> {
-        tvCloudBadge.visibility = View.VISIBLE
-        tvCloudBadge.text = "✓ محفوظ في Firestore (voice_notes)"
-      }
-      else -> {
-        tvCloudBadge.visibility = View.GONE
-      }
+    if (hasTranscript) {
+      tvCloudBadge.visibility = View.VISIBLE
+      tvCloudBadge.text = "✓ مفرّغ ومحفوظ محلياً"
+    } else {
+      tvCloudBadge.visibility = View.GONE
     }
 
     val transcriptionEnabled = CallVaultSettings.isVoiceTranscriptionEnabled(parent.context)

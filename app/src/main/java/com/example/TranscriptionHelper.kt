@@ -21,10 +21,7 @@ data class TranscriptionResult(
   val summaryPoints: List<String>,
   val actionItems: List<String>,
   val notice: String = "",
-  val isPlaceholder: Boolean = false,
-  val savedToFirestore: Boolean = false,
-  val firestoreDocId: String? = null,
-  val storageDownloadUrl: String? = null,
+  val savedLocally: Boolean = false,
 )
 
 interface CallTranscriber {
@@ -211,12 +208,12 @@ class GeminiCallTranscriber : CallTranscriber {
 
 class TranscriptionHelper(
   private val transcriber: CallTranscriber = GeminiCallTranscriber(),
-  private val repository: FirebaseCallVaultRepository? = null,
+  private val repository: LocalCallVaultRepository? = null,
 ) {
   suspend fun transcribeAndSaveCall(
     context: Context,
     recording: CallRecordingItem,
-    overrideRepository: FirebaseCallVaultRepository? = null,
+    overrideRepository: LocalCallVaultRepository? = null,
   ): Result<TranscriptionResult> {
     val aiResult =
       transcriber
@@ -228,41 +225,24 @@ class TranscriptionHelper(
         )
         .getOrElse { return Result.failure(it) }
 
-    val appContext = context.applicationContext
-    val targetRepo = overrideRepository ?: repository ?: FirebaseCallVaultRepository(appContext)
-    val uploadedAudio =
-      FirebaseStorageUploader.getUploadedInfo(
-        context = appContext,
-        folder = VaultStorageFolder.CALLS,
-        fileName = recording.fileName,
-      )
-
-    val saveResult =
-      targetRepo.saveCallRecord(
-        recording = recording,
-        transcription = aiResult,
-        storagePath = uploadedAudio?.storagePath,
-        storageDownloadUrl = uploadedAudio?.downloadUrl,
-      )
+    val targetRepo = overrideRepository ?: repository ?: LocalCallVaultRepository(context.applicationContext)
+    val saveResult = targetRepo.saveCallRecord(recording = recording, transcription = aiResult)
 
     return saveResult.fold(
-      onSuccess = { saved ->
+      onSuccess = {
         Result.success(
           aiResult.copy(
-            savedToFirestore = true,
-            firestoreDocId = saved.id,
-            storageDownloadUrl = saved.storageDownloadUrl,
-            notice = "تم حفظ النص والملخص والمهام في مجموعة calls بـ Firestore.",
+            savedLocally = true,
+            notice = "تم حفظ النص والملخص والمهام محلياً على جهازك.",
           )
         )
       },
       onFailure = { saveError ->
-        Log.w(TAG, "Call transcription succeeded but Firestore save failed", saveError)
+        Log.w(TAG, "Call transcription succeeded but local save failed", saveError)
         Result.success(
           aiResult.copy(
-            savedToFirestore = false,
-            notice =
-              "تم التفريغ بنجاح، ولكن تعذر الحفظ في Firestore: ${saveError.localizedMessage ?: "خطأ غير معروف"}",
+            savedLocally = false,
+            notice = "تم التفريغ بنجاح، ولكن تعذر الحفظ المحلي: ${saveError.localizedMessage ?: "خطأ"}",
           )
         )
       },
@@ -272,7 +252,7 @@ class TranscriptionHelper(
   suspend fun transcribeAndSaveVoiceNote(
     context: Context,
     note: VoiceNoteItem,
-    overrideRepository: FirebaseCallVaultRepository? = null,
+    overrideRepository: LocalCallVaultRepository? = null,
   ): Result<TranscriptionResult> {
     val aiResult =
       transcriber
@@ -284,41 +264,24 @@ class TranscriptionHelper(
         )
         .getOrElse { return Result.failure(it) }
 
-    val appContext = context.applicationContext
-    val targetRepo = overrideRepository ?: repository ?: FirebaseCallVaultRepository(appContext)
-    val uploadedAudio =
-      FirebaseStorageUploader.getUploadedInfo(
-        context = appContext,
-        folder = VaultStorageFolder.VOICE_NOTES,
-        fileName = note.fileName,
-      )
-
-    val saveResult =
-      targetRepo.saveVoiceNoteRecord(
-        note = note,
-        transcription = aiResult,
-        storagePath = uploadedAudio?.storagePath,
-        storageDownloadUrl = uploadedAudio?.downloadUrl,
-      )
+    val targetRepo = overrideRepository ?: repository ?: LocalCallVaultRepository(context.applicationContext)
+    val saveResult = targetRepo.saveVoiceNoteRecord(note = note, transcription = aiResult)
 
     return saveResult.fold(
-      onSuccess = { saved ->
+      onSuccess = {
         Result.success(
           aiResult.copy(
-            savedToFirestore = true,
-            firestoreDocId = saved.id,
-            storageDownloadUrl = saved.storageDownloadUrl,
-            notice = "تم حفظ النص والملخص والمهام في مجموعة voice_notes بـ Firestore.",
+            savedLocally = true,
+            notice = "تم حفظ النص والملخص والمهام محلياً على جهازك.",
           )
         )
       },
       onFailure = { saveError ->
-        Log.w(TAG, "Voice note transcription succeeded but Firestore save failed", saveError)
+        Log.w(TAG, "Voice note transcription succeeded but local save failed", saveError)
         Result.success(
           aiResult.copy(
-            savedToFirestore = false,
-            notice =
-              "تم التفريغ بنجاح، ولكن تعذر الحفظ في Firestore: ${saveError.localizedMessage ?: "خطأ غير معروف"}",
+            savedLocally = false,
+            notice = "تم التفريغ بنجاح، ولكن تعذر الحفظ المحلي: ${saveError.localizedMessage ?: "خطأ"}",
           )
         )
       },

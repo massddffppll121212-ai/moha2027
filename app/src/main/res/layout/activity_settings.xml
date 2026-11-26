@@ -118,7 +118,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="2dp"
-                            android:text="مجلد CallVault/Calls • مجموعة calls"
+                            android:text="مجلد الحفظ المحلي: CallVault/Calls"
                             android:textColor="#94A3B8"
                             android:textSize="12sp" />
                     </LinearLayout>
@@ -171,57 +171,6 @@
                         android:layout_width="wrap_content"
                         android:layout_height="48dp"
                         android:contentDescription="تشغيل أو إيقاف التسجيل التلقائي للمكالمات"
-                        android:minWidth="56dp"
-                        android:minHeight="48dp" />
-                </LinearLayout>
-
-                <View
-                    android:layout_width="match_parent"
-                    android:layout_height="1dp"
-                    android:layout_marginVertical="12dp"
-                    android:background="#1E293B" />
-
-                <!-- 2. تشغيل / إيقاف الرفع التلقائي لـ Firebase -->
-                <LinearLayout
-                    android:id="@+id/row_calls_auto_upload"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:clickable="true"
-                    android:focusable="true"
-                    android:gravity="center_vertical"
-                    android:minHeight="56dp"
-                    android:orientation="horizontal"
-                    android:paddingVertical="4dp">
-
-                    <LinearLayout
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_marginEnd="12dp"
-                        android:layout_weight="1"
-                        android:orientation="vertical">
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="الرفع التلقائي لـ Firebase"
-                            android:textColor="#F8FAFC"
-                            android:textSize="15sp"
-                            android:textStyle="bold" />
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="3dp"
-                            android:text="مزامنة المكالمة في calls ورفع الصوت إلى Storage تلقائياً"
-                            android:textColor="#94A3B8"
-                            android:textSize="12sp" />
-                    </LinearLayout>
-
-                    <Switch
-                        android:id="@+id/switch_calls_auto_upload"
-                        android:layout_width="wrap_content"
-                        android:layout_height="48dp"
-                        android:contentDescription="تشغيل أو إيقاف الرفع التلقائي لـ Firebase"
                         android:minWidth="56dp"
                         android:minHeight="48dp" />
                 </LinearLayout>
@@ -332,7 +281,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="2dp"
-                            android:text="مجلد CallVault/VoiceNotes • مجموعة voice_notes"
+                            android:text="مجلد الحفظ المحلي: CallVault/VoiceNotes"
                             android:textColor="#94A3B8"
                             android:textSize="12sp" />
                     </LinearLayout>
@@ -395,7 +344,6 @@
                     android:layout_marginVertical="12dp"
                     android:background="#1E293B" />
 
-                <!-- 2. اختيار مكان الحفظ: الهاتف فقط / الهاتف + Firebase -->
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
@@ -405,51 +353,12 @@
                     android:textStyle="bold" />
 
                 <TextView
-                    android:id="@+id/tv_voice_storage_hint"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="3dp"
-                    android:text="يتم حفظ التسجيل الصوتي على الهاتف مع المزامنة في Firebase."
+                    android:text="يتم حفظ جميع التسجيلات الصوتية على الهاتف مباشرة في مجلد CallVault/VoiceNotes دون الحاجة لتسجيل الدخول."
                     android:textColor="#94A3B8"
                     android:textSize="12sp" />
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:orientation="horizontal">
-
-                    <TextView
-                        android:id="@+id/btn_storage_phone_only"
-                        android:layout_width="0dp"
-                        android:layout_height="48dp"
-                        android:layout_marginEnd="8dp"
-                        android:layout_weight="1"
-                        android:background="@drawable/bg_pill_unselected"
-                        android:clickable="true"
-                        android:focusable="true"
-                        android:gravity="center"
-                        android:minHeight="48dp"
-                        android:text="الهاتف فقط"
-                        android:textColor="#94A3B8"
-                        android:textSize="14sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:id="@+id/btn_storage_phone_and_firebase"
-                        android:layout_width="0dp"
-                        android:layout_height="48dp"
-                        android:layout_weight="1"
-                        android:background="@drawable/bg_pill_selected"
-                        android:clickable="true"
-                        android:focusable="true"
-                        android:gravity="center"
-                        android:minHeight="48dp"
-                        android:text="الهاتف + Firebase"
-                        android:textColor="#FFFFFF"
-                        android:textSize="14sp"
-                        android:textStyle="bold" />
-                </LinearLayout>
             </LinearLayout>
 
             <Button

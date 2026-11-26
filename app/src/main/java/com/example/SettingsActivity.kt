@@ -18,15 +18,11 @@ import androidx.core.view.WindowInsetsCompat
 class SettingsActivity : ComponentActivity() {
 
   private lateinit var switchAutoCallRecording: Switch
-  private lateinit var switchCallsAutoUpload: Switch
   private lateinit var btnQualityHigh: TextView
   private lateinit var btnQualityMedium: TextView
   private lateinit var tvCallQualityHint: TextView
 
   private lateinit var switchVoiceTranscription: Switch
-  private lateinit var btnStoragePhoneOnly: TextView
-  private lateinit var btnStoragePhoneAndFirebase: TextView
-  private lateinit var tvVoiceStorageHint: TextView
 
   private lateinit var btnBack: ImageButton
   private lateinit var btnSaveDone: Button
@@ -57,18 +53,13 @@ class SettingsActivity : ComponentActivity() {
     btnSaveDone = findViewById(R.id.btn_save_settings_done)
 
     switchAutoCallRecording = findViewById(R.id.switch_auto_call_recording)
-    switchCallsAutoUpload = findViewById(R.id.switch_calls_auto_upload)
     btnQualityHigh = findViewById(R.id.btn_quality_high)
     btnQualityMedium = findViewById(R.id.btn_quality_medium)
     tvCallQualityHint = findViewById(R.id.tv_call_quality_hint)
 
     switchVoiceTranscription = findViewById(R.id.switch_voice_transcription)
-    btnStoragePhoneOnly = findViewById(R.id.btn_storage_phone_only)
-    btnStoragePhoneAndFirebase = findViewById(R.id.btn_storage_phone_and_firebase)
-    tvVoiceStorageHint = findViewById(R.id.tv_voice_storage_hint)
 
     applySwitchColors(switchAutoCallRecording)
-    applySwitchColors(switchCallsAutoUpload)
     applySwitchColors(switchVoiceTranscription)
   }
 
@@ -89,11 +80,8 @@ class SettingsActivity : ComponentActivity() {
 
   private fun loadSavedSettings() {
     switchAutoCallRecording.isChecked = CallVaultSettings.isAutoCallRecordingEnabled(this)
-    switchCallsAutoUpload.isChecked = CallVaultSettings.isCallsAutoUploadFirebaseEnabled(this)
     renderCallQuality(CallVaultSettings.getCallRecordingQuality(this))
-
     switchVoiceTranscription.isChecked = CallVaultSettings.isVoiceTranscriptionEnabled(this)
-    renderVoiceStorageTarget(CallVaultSettings.getVoiceStorageTarget(this))
   }
 
   private fun setupListeners() {
@@ -109,13 +97,6 @@ class SettingsActivity : ComponentActivity() {
     }
     switchAutoCallRecording.setOnCheckedChangeListener { _, isChecked ->
       CallVaultSettings.setAutoCallRecordingEnabled(this, isChecked)
-    }
-
-    findViewById<View>(R.id.row_calls_auto_upload).setOnClickListener {
-      switchCallsAutoUpload.toggle()
-    }
-    switchCallsAutoUpload.setOnCheckedChangeListener { _, isChecked ->
-      CallVaultSettings.setCallsAutoUploadFirebaseEnabled(this, isChecked)
     }
 
     btnQualityHigh.setOnClickListener {
@@ -134,16 +115,6 @@ class SettingsActivity : ComponentActivity() {
     switchVoiceTranscription.setOnCheckedChangeListener { _, isChecked ->
       CallVaultSettings.setVoiceTranscriptionEnabled(this, isChecked)
     }
-
-    btnStoragePhoneOnly.setOnClickListener {
-      CallVaultSettings.setVoiceStorageTarget(this, VoiceStorageTarget.PHONE_ONLY)
-      renderVoiceStorageTarget(VoiceStorageTarget.PHONE_ONLY)
-    }
-
-    btnStoragePhoneAndFirebase.setOnClickListener {
-      CallVaultSettings.setVoiceStorageTarget(this, VoiceStorageTarget.PHONE_AND_FIREBASE)
-      renderVoiceStorageTarget(VoiceStorageTarget.PHONE_AND_FIREBASE)
-    }
   }
 
   private fun renderCallQuality(quality: CallRecordingQuality) {
@@ -155,18 +126,6 @@ class SettingsActivity : ComponentActivity() {
         "جودة عالية: 256 kbps • 48 kHz لنقاء أوضح للمكالمات"
       } else {
         "جودة متوسطة: 128 kbps • 44.1 kHz لتوفير مساحة التخزين"
-      }
-  }
-
-  private fun renderVoiceStorageTarget(target: VoiceStorageTarget) {
-    val isPhoneOnly = target == VoiceStorageTarget.PHONE_ONLY
-    updatePillStyle(btnStoragePhoneOnly, isPhoneOnly)
-    updatePillStyle(btnStoragePhoneAndFirebase, !isPhoneOnly)
-    tvVoiceStorageHint.text =
-      if (isPhoneOnly) {
-        "يتم حفظ التسجيل الصوتي في الهاتف فقط (CallVault/VoiceNotes) دون رفع لـ Firebase."
-      } else {
-        "يتم حفظ التسجيل الصوتي في الهاتف ومزامنته مع voice_notes و Firebase Storage."
       }
   }
 

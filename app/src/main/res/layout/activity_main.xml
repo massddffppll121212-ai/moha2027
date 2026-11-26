@@ -6,103 +6,13 @@
     android:background="#111111"
     android:layoutDirection="rtl">
 
-    <!-- بوابة تسجيل الدخول بحساب Google قبل الوصول لبيانات Firestore و Storage -->
-    <LinearLayout
-        android:id="@+id/auth_gate_container"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:gravity="center"
-        android:orientation="vertical"
-        android:padding="24dp"
-        android:visibility="visible">
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="@drawable/bg_card_dark"
-            android:gravity="center_horizontal"
-            android:orientation="vertical"
-            android:padding="24dp">
-
-            <ImageView
-                android:layout_width="96dp"
-                android:layout_height="96dp"
-                android:contentDescription="@string/app_name"
-                android:scaleType="fitCenter"
-                android:src="@drawable/ic_donkeyear_logo_rounded" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:text="@string/app_name"
-                android:textColor="#FFFFFF"
-                android:textSize="26sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:gravity="center"
-                android:text="DonkeyEar Recorder • Hear Everything"
-                android:textColor="#FFC107"
-                android:textSize="13sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
-                android:gravity="center"
-                android:lineSpacingExtra="4dp"
-                android:text="سجّل الدخول بحساب Google لحفظ المكالمات والتسجيلات الصوتية والتفريغ النصي في Firestore و Firebase Storage بأمان."
-                android:textColor="#94A3B8"
-                android:textSize="13sp" />
-
-            <TextView
-                android:id="@+id/tv_auth_error"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
-                android:background="@drawable/bg_search_field"
-                android:gravity="center"
-                android:padding="10dp"
-                android:textColor="#FCA5A5"
-                android:textSize="12sp"
-                android:visibility="gone" />
-
-            <ProgressBar
-                android:id="@+id/auth_loading"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:layout_marginTop="16dp"
-                android:indeterminateTint="#38BDF8"
-                android:visibility="gone" />
-
-            <Button
-                android:id="@+id/btn_google_sign_in"
-                android:layout_width="match_parent"
-                android:layout_height="52dp"
-                android:layout_marginTop="20dp"
-                android:background="@drawable/bg_pill_selected"
-                android:minHeight="48dp"
-                android:paddingHorizontal="20dp"
-                android:text="تسجيل الدخول بحساب Google"
-                android:textAllCaps="false"
-                android:textColor="#FFFFFF"
-                android:textSize="15sp"
-                android:textStyle="bold" />
-        </LinearLayout>
-    </LinearLayout>
-
-    <!-- الواجهة الرئيسية بعد تسجيل الدخول -->
+    <!-- الواجهة الرئيسية مباشرة بدون تسجيل دخول -->
     <LinearLayout
         android:id="@+id/vault_content_container"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical"
-        android:visibility="gone">
+        android:visibility="visible">
 
         <!-- الشريط العلوي مع زر الإعدادات فوق على اليمين وشعار DonkeyEar والبحث والتحديث وتسجيل الخروج -->
         <LinearLayout
@@ -185,7 +95,6 @@
                 android:id="@+id/btn_refresh"
                 android:layout_width="48dp"
                 android:layout_height="48dp"
-                android:layout_marginEnd="2dp"
                 android:background="@drawable/bg_circle_surface"
                 android:contentDescription="تحديث القائمة"
                 android:minWidth="48dp"
@@ -193,18 +102,6 @@
                 android:padding="13dp"
                 android:scaleType="centerInside"
                 android:src="@drawable/ic_refresh" />
-
-            <ImageButton
-                android:id="@+id/btn_sign_out"
-                android:layout_width="48dp"
-                android:layout_height="48dp"
-                android:background="@drawable/bg_circle_delete"
-                android:contentDescription="تسجيل الخروج"
-                android:minWidth="48dp"
-                android:minHeight="48dp"
-                android:padding="13dp"
-                android:scaleType="centerInside"
-                android:src="@drawable/ic_close" />
         </LinearLayout>
 
         <!-- التابين الرئيسيين المنفصلين تماماً: [ المكالمات | تسجيلات صوتية ] -->

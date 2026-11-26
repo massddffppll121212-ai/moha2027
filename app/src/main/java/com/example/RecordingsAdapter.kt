@@ -73,32 +73,14 @@ class RecordingsAdapter(
     tvDirectionLabel.text = item.direction.arabicLabel
     tvTimestamp.text = formatTimestamp(item.timestampMs)
 
-    val cloudCall = savedCalls[item.fileName]
-    val uploadedLocal =
-      FirebaseStorageUploader.getUploadedInfo(parent.context, VaultStorageFolder.CALLS, item.fileName)
-    val hasTranscript = !cloudCall?.transcript.isNullOrBlank()
-    val hasStorage = !cloudCall?.storageDownloadUrl.isNullOrBlank() || uploadedLocal != null
+    val savedCall = savedCalls[item.fileName]
+    val hasTranscript = !savedCall?.transcript.isNullOrBlank()
 
-    when {
-      hasTranscript && hasStorage -> {
-        tvCloudBadge.visibility = View.VISIBLE
-        tvCloudBadge.text = "✓ مفرّغ في calls ومرفوع في Storage"
-      }
-      hasTranscript -> {
-        tvCloudBadge.visibility = View.VISIBLE
-        tvCloudBadge.text = "✓ مفرّغ في Firestore (calls)"
-      }
-      hasStorage -> {
-        tvCloudBadge.visibility = View.VISIBLE
-        tvCloudBadge.text = "☁️ محفوظ في calls و Storage"
-      }
-      cloudCall != null -> {
-        tvCloudBadge.visibility = View.VISIBLE
-        tvCloudBadge.text = "✓ محفوظ في Firestore (calls)"
-      }
-      else -> {
-        tvCloudBadge.visibility = View.GONE
-      }
+    if (hasTranscript) {
+      tvCloudBadge.visibility = View.VISIBLE
+      tvCloudBadge.text = "✓ مفرّغ ومحفوظ محلياً"
+    } else {
+      tvCloudBadge.visibility = View.GONE
     }
 
     btnTranscribe.text = if (hasTranscript) "عرض النص والملخص المحفوظ" else "تحويل لنص"
