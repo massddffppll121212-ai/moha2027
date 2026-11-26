@@ -116,12 +116,7 @@ class CloudSyncManager private constructor(context: Context) {
       return true
     }
 
-    val clientId =
-      try {
-        appContext.getString(R.string.default_web_client_id)
-      } catch (_: Exception) {
-        return false
-      }
+    val clientId = resolveDefaultWebClientId() ?: return false
 
     return try {
       val credentialManager = CredentialManager.create(appContext)
@@ -161,13 +156,12 @@ class CloudSyncManager private constructor(context: Context) {
       ?: return Result.failure(IllegalStateException("تعذر تهيئة خدمة المصادقة السحابية."))
 
     val clientId =
-      try {
-        appContext.getString(R.string.default_web_client_id)
-      } catch (_: Exception) {
-        return Result.failure(
-          IllegalStateException("معرّف Google Sign-In (default_web_client_id) غير متوفر في البناء.")
+      resolveDefaultWebClientId()
+        ?: return Result.failure(
+          IllegalStateException(
+            "معرّف Google Sign-In غير متوفر. تأكد من وجود app/google-services.json المطابق لحزمة التطبيق."
+          )
         )
-      }
 
     return try {
       val credentialManager = CredentialManager.create(activity)
@@ -477,6 +471,21 @@ class CloudSyncManager private constructor(context: Context) {
         )
       }
       Result.failure(e)
+    }
+  }
+
+  private fun resolveDefaultWebClientId(): String? {
+    val resId =
+      appContext.resources.getIdentifier(
+        "default_web_client_id",
+        "string",
+        appContext.packageName,
+      )
+    if (resId == 0) return null
+    return try {
+      appContext.getString(resId).trim().takeIf { it.isNotEmpty() }
+    } catch (_: Exception) {
+      null
     }
   }
 
