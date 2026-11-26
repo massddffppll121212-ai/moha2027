@@ -1,0 +1,195 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global safety net: deny everything by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidAiAndStorageFields(data) {
+      return (!('transcript' in data) || (data.transcript is string && data.transcript.size() >= 1 && data.transcript.size() <= 100000)) &&
+             (!('summaryPoints' in data) || (data.summaryPoints is list && data.summaryPoints.size() <= 5 && (data.summaryPoints.size() == 0 || data.summaryPoints[0] is string))) &&
+             (!('actionItems' in data) || (data.actionItems is list && data.actionItems.size() <= 50 && (data.actionItems.size() == 0 || data.actionItems[0] is string))) &&
+             (!('storagePath' in data) || (data.storagePath is string && data.storagePath.size() >= 1 && data.storagePath.size() <= 500)) &&
+             (!('storageDownloadUrl' in data) || (data.storageDownloadUrl is string && data.storageDownloadUrl.size() >= 1 && data.storageDownloadUrl.size() <= 1000));
+    }
+
+    function isValidCallRecord(data) {
+      return data.userId is string &&
+             data.userId == request.auth.uid &&
+             data.fileName is string &&
+             data.fileName.size() >= 1 &&
+             data.fileName.size() <= 200 &&
+             data.callerName is string &&
+             data.callerName.size() <= 150 &&
+             data.phoneNumber is string &&
+             data.phoneNumber.size() <= 60 &&
+             data.direction is string &&
+             data.direction in ['INCOMING', 'OUTGOING'] &&
+             data.durationMs is int &&
+             data.durationMs >= 0 &&
+             data.durationMs <= 86400000 &&
+             data.recordedAtMs is int &&
+             data.recordedAtMs >= 0 &&
+             isValidAiAndStorageFields(data);
+    }
+
+    function isValidVoiceNoteRecord(data) {
+      return data.userId is string &&
+             data.userId == request.auth.uid &&
+             data.fileName is string &&
+             data.fileName.size() >= 1 &&
+             data.fileName.size() <= 200 &&
+             data.title is string &&
+             data.title.size() >= 1 &&
+             data.title.size() <= 150 &&
+             data.durationMs is int &&
+             data.durationMs >= 0 &&
+             data.durationMs <= 86400000 &&
+             data.recordedAtMs is int &&
+             data.recordedAtMs >= 0 &&
+             isValidAiAndStorageFields(data);
+    }
+
+    match /calls/{callId} {
+      allow get: if isSignedIn() && isValidId(callId) && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && existing().userId == request.auth.uid;
+
+      allow create: if isSignedIn() &&
+                       isValidId(callId) &&
+                       incoming().keys().hasAll([
+                         'userId',
+                         'fileName',
+                         'callerName',
+                         'phoneNumber',
+                         'direction',
+                         'durationMs',
+                         'recordedAtMs',
+                         'createdAt',
+                         'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId',
+                         'fileName',
+                         'callerName',
+                         'phoneNumber',
+                         'direction',
+                         'durationMs',
+                         'recordedAtMs',
+                         'transcript',
+                         'summaryPoints',
+                         'actionItems',
+                         'storagePath',
+                         'storageDownloadUrl',
+                         'createdAt',
+                         'updatedAt'
+                       ]) &&
+                       incoming().createdAt is timestamp &&
+                       incoming().createdAt <= request.time &&
+                       incoming().updatedAt is timestamp &&
+                       incoming().updatedAt <= request.time &&
+                       isValidCallRecord(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(callId) &&
+                       existing().userId == request.auth.uid &&
+                       isValidCallRecord(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().fileName == existing().fileName &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt is timestamp &&
+                       incoming().updatedAt <= request.time &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'callerName',
+                         'phoneNumber',
+                         'direction',
+                         'durationMs',
+                         'recordedAtMs',
+                         'transcript',
+                         'summaryPoints',
+                         'actionItems',
+                         'storagePath',
+                         'storageDownloadUrl',
+                         'updatedAt'
+                       ]);
+
+      allow delete: if isSignedIn() && isValidId(callId) && existing().userId == request.auth.uid;
+    }
+
+    match /voice_notes/{noteId} {
+      allow get: if isSignedIn() && isValidId(noteId) && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && existing().userId == request.auth.uid;
+
+      allow create: if isSignedIn() &&
+                       isValidId(noteId) &&
+                       incoming().keys().hasAll([
+                         'userId',
+                         'fileName',
+                         'title',
+                         'durationMs',
+                         'recordedAtMs',
+                         'createdAt',
+                         'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId',
+                         'fileName',
+                         'title',
+                         'durationMs',
+                         'recordedAtMs',
+                         'transcript',
+                         'summaryPoints',
+                         'actionItems',
+                         'storagePath',
+                         'storageDownloadUrl',
+                         'createdAt',
+                         'updatedAt'
+                       ]) &&
+                       incoming().createdAt is timestamp &&
+                       incoming().createdAt <= request.time &&
+                       incoming().updatedAt is timestamp &&
+                       incoming().updatedAt <= request.time &&
+                       isValidVoiceNoteRecord(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(noteId) &&
+                       existing().userId == request.auth.uid &&
+                       isValidVoiceNoteRecord(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().fileName == existing().fileName &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt is timestamp &&
+                       incoming().updatedAt <= request.time &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'title',
+                         'durationMs',
+                         'recordedAtMs',
+                         'transcript',
+                         'summaryPoints',
+                         'actionItems',
+                         'storagePath',
+                         'storageDownloadUrl',
+                         'updatedAt'
+                       ]);
+
+      allow delete: if isSignedIn() && isValidId(noteId) && existing().userId == request.auth.uid;
+    }
+  }
+}

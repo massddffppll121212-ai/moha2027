@@ -1,0 +1,161 @@
+{
+  "entities": {
+    "CallRecord": {
+      "title": "CallRecord",
+      "description": "Recorded phone call stored in CallVault/Calls with optional AI transcription and Firebase Storage link.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated Firebase UID of the owner."
+        },
+        "fileName": {
+          "type": "string",
+          "description": "MP3 filename inside CallVault/Calls."
+        },
+        "callerName": {
+          "type": "string",
+          "description": "Contact name or Arabic fallback label."
+        },
+        "phoneNumber": {
+          "type": "string",
+          "description": "Caller phone number."
+        },
+        "direction": {
+          "type": "string",
+          "enum": ["INCOMING", "OUTGOING"],
+          "description": "Phone call direction."
+        },
+        "durationMs": {
+          "type": "integer",
+          "description": "Call recording duration in milliseconds."
+        },
+        "recordedAtMs": {
+          "type": "integer",
+          "description": "Recording timestamp in epoch milliseconds."
+        },
+        "transcript": {
+          "type": "string",
+          "description": "Optional AI-generated Arabic transcript."
+        },
+        "summaryPoints": {
+          "type": "array",
+          "description": "Optional 3-point Arabic summary."
+        },
+        "actionItems": {
+          "type": "array",
+          "description": "Optional extracted action items."
+        },
+        "storagePath": {
+          "type": "string",
+          "description": "Optional Firebase Storage path under CallVault/Calls."
+        },
+        "storageDownloadUrl": {
+          "type": "string",
+          "description": "Optional Firebase Storage download URL."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update server timestamp."
+        }
+      },
+      "required": [
+        "userId",
+        "fileName",
+        "callerName",
+        "phoneNumber",
+        "direction",
+        "durationMs",
+        "recordedAtMs",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "VoiceNoteRecord": {
+      "title": "VoiceNoteRecord",
+      "description": "Manual microphone voice note stored in CallVault/VoiceNotes with optional AI transcription and Firebase Storage link.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated Firebase UID of the owner."
+        },
+        "fileName": {
+          "type": "string",
+          "description": "MP3 filename inside CallVault/VoiceNotes."
+        },
+        "title": {
+          "type": "string",
+          "description": "User-entered title of the voice note."
+        },
+        "durationMs": {
+          "type": "integer",
+          "description": "Voice note duration in milliseconds."
+        },
+        "recordedAtMs": {
+          "type": "integer",
+          "description": "Recording timestamp in epoch milliseconds."
+        },
+        "transcript": {
+          "type": "string",
+          "description": "Optional AI-generated Arabic transcript."
+        },
+        "summaryPoints": {
+          "type": "array",
+          "description": "Optional 3-point Arabic summary."
+        },
+        "actionItems": {
+          "type": "array",
+          "description": "Optional extracted action items."
+        },
+        "storagePath": {
+          "type": "string",
+          "description": "Optional Firebase Storage path under CallVault/VoiceNotes."
+        },
+        "storageDownloadUrl": {
+          "type": "string",
+          "description": "Optional Firebase Storage download URL."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update server timestamp."
+        }
+      },
+      "required": [
+        "userId",
+        "fileName",
+        "title",
+        "durationMs",
+        "recordedAtMs",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/calls/{callId}": {
+      "schema": {
+        "$ref": "#/entities/CallRecord"
+      },
+      "description": "Recorded incoming/outgoing phone calls metadata, Storage link, and optional AI transcription."
+    },
+    "/voice_notes/{noteId}": {
+      "schema": {
+        "$ref": "#/entities/VoiceNoteRecord"
+      },
+      "description": "Manual voice notes metadata, Storage link, and optional AI transcription."
+    }
+  }
+}
