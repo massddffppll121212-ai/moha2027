@@ -22,6 +22,7 @@ data class TranscriptionResult(
   val actionItems: List<String>,
   val notice: String = "",
   val savedLocally: Boolean = false,
+  val syncedToCloud: Boolean = false,
 )
 
 interface CallTranscriber {
@@ -77,7 +78,18 @@ class GeminiCallTranscriber : CallTranscriber {
   ): Result<TranscriptionResult> =
     withContext(Dispatchers.IO) {
       try {
-        val audioBytes = readAudioBytes(context, uri, legacyFilePath)
+        val appContext = context.applicationContext ?: context
+        if (!ensureFirebaseInitialized(appContext, null)) {
+          return@withContext Result.failure(
+            IllegalStateException(
+              "تعذر تهيئة Firebase في هذه النسخة من التطبيق.\n" +
+                "السبب: ملف app/google-services.json غير موجود داخل مستودع GitHub أثناء بناء APK.\n" +
+                "الحل: أضف ملف app/google-services.json إلى مجلد app/ في GitHub (أو أضف محتواه في Secret باسم GOOGLE_SERVICES_JSON) ثم أعد بناء APK."
+            )
+          )
+        }
+
+        val audioBytes = readAudioBytes(appContext, uri, legacyFilePath)
         if (audioBytes.isEmpty()) {
           return@withContext Result.failure(
             IllegalStateException("ملف التسجيل فارغ ولا يمكن تفريغه.")
@@ -166,11 +178,17 @@ class GeminiCallTranscriber : CallTranscriber {
         throw e
       } catch (e: Exception) {
         Log.e(TAG, "Gemini audio transcription failed", e)
-        Result.failure(
-          IllegalStateException(
-            e.localizedMessage ?: "فشل تحويل الصوت إلى نص عبر Firebase AI."
-          )
-        )
+        val raw = e.localizedMessage ?: e.message.orEmpty()
+        val friendlyMessage =
+          when {
+            raw.contains("Default FirebaseApp is not initialized", ignoreCase = true) ->
+              "تعذر تهيئة Firebase في التطبيق. تأكد من وجود ملف app/google-services.json عند بناء APK."
+            raw.contains("403") || raw.contains("App Check", ignoreCase = true) ->
+              "فشل التحقق الأمني (App Check) مع Firebase AI.\nالتفاصيل: $raw"
+            raw.isNotBlank() -> raw
+            else -> "فشل تحويل الصوت إلى نص عبر Firebase AI."
+          }
+        Result.failure(IllegalStateException(friendlyMessage))
       }
     }
 
@@ -195,7 +213,48 @@ class GeminiCallTranscriber : CallTranscriber {
     ) {
       return "audio/mp4"
     }
-    return "audio/mpeg"
+    if (
+      bytes.size >= 3 &&
+        bytes[0] == 'I'.code.toByte() &&
+        bytes[1] == 'D'.code.toByte() &&
+        bytes[2] == '3'.code.toByte()
+    ) {
+      return "audio/mpeg"
+    }
+    if (
+      bytes.size >= 4 &&
+        bytes[0] == 'R'.code.toByte() &&
+        bytes[1] == 'I'.code.toByte() &&
+        bytes[2] == 'F'.code.toByte() &&
+        bytes[3] == 'F'.code.toByte()
+    ) {
+      return "audio/wav"
+    }
+    if (
+      bytes.size >= 4 &&
+        bytes[0] == 'O'.code.toByte() &&
+        bytes[1] == 'g'.code.toByte() &&
+        bytes[2] == 'g'.code.toByte() &&
+        bytes[3] == 'S'.code.toByte()
+    ) {
+      return "audio/ogg"
+    }
+    if (
+      bytes.size >= 5 &&
+        bytes[0] == '#'.code.toByte() &&
+        bytes[1] == '!'.code.toByte() &&
+        bytes[2] == 'A'.code.toByte() &&
+        bytes[3] == 'M'.code.toByte() &&
+        bytes[4] == 'R'.code.toByte()
+    ) {
+      return "audio/amr"
+    }
+    if (bytes.size >= 2 && (bytes[0].toInt() and 0xFF) == 0xFF) {
+      val second = bytes[1].toInt() and 0xF6
+      if (second == 0xF0) return "audio/aac"
+      if ((bytes[1].toInt() and 0xE0) == 0xE0) return "audio/mpeg"
+    }
+    return "audio/mp4"
   }
 
   companion object {
@@ -215,37 +274,55 @@ class TranscriptionHelper(
     recording: CallRecordingItem,
     overrideRepository: LocalCallVaultRepository? = null,
   ): Result<TranscriptionResult> {
+    val appContext = context.applicationContext ?: context
     val aiResult =
       transcriber
         .transcribeAudio(
-          context = context,
+          context = appContext,
           uri = recording.uri,
           legacyFilePath = recording.legacyFilePath,
           contextPromptHint = "مكالمة هاتفية ${recording.direction.arabicLabel} - ${recording.phoneNumber}",
         )
         .getOrElse { return Result.failure(it) }
 
-    val targetRepo = overrideRepository ?: repository ?: LocalCallVaultRepository(context.applicationContext)
+    val targetRepo = overrideRepository ?: repository ?: LocalCallVaultRepository.getInstance(appContext)
     val saveResult = targetRepo.saveCallRecord(recording = recording, transcription = aiResult)
 
-    return saveResult.fold(
-      onSuccess = {
-        Result.success(
-          aiResult.copy(
-            savedLocally = true,
-            notice = "تم حفظ النص والملخص والمهام محلياً على جهازك.",
-          )
-        )
-      },
-      onFailure = { saveError ->
+    val savedRecord =
+      saveResult.getOrElse { saveError ->
         Log.w(TAG, "Call transcription succeeded but local save failed", saveError)
-        Result.success(
+        return Result.success(
           aiResult.copy(
             savedLocally = false,
+            syncedToCloud = false,
             notice = "تم التفريغ بنجاح، ولكن تعذر الحفظ المحلي: ${saveError.localizedMessage ?: "خطأ"}",
           )
         )
-      },
+      }
+
+    val cloudSync = CloudSyncManager.getInstance(appContext)
+    val syncedUid =
+      if (cloudSync.syncState.value.isSignedIn) {
+        cloudSync.pushCallRecord(savedRecord).getOrNull()
+      } else {
+        null
+      }
+
+    if (syncedUid != null) {
+      targetRepo.markCallSynced(savedRecord.fileName, syncedUid)
+    }
+
+    return Result.success(
+      aiResult.copy(
+        savedLocally = true,
+        syncedToCloud = syncedUid != null,
+        notice =
+          if (syncedUid != null) {
+            "تم حفظ التفريغ محلياً ومزامنته مع السحابة بنجاح."
+          } else {
+            "تم حفظ النص والملخص والمهام محلياً على جهازك."
+          },
+      )
     )
   }
 
@@ -254,37 +331,55 @@ class TranscriptionHelper(
     note: VoiceNoteItem,
     overrideRepository: LocalCallVaultRepository? = null,
   ): Result<TranscriptionResult> {
+    val appContext = context.applicationContext ?: context
     val aiResult =
       transcriber
         .transcribeAudio(
-          context = context,
+          context = appContext,
           uri = note.uri,
           legacyFilePath = note.legacyFilePath,
           contextPromptHint = "تسجيل صوتي شخصي بعنوان: ${note.title}",
         )
         .getOrElse { return Result.failure(it) }
 
-    val targetRepo = overrideRepository ?: repository ?: LocalCallVaultRepository(context.applicationContext)
+    val targetRepo = overrideRepository ?: repository ?: LocalCallVaultRepository.getInstance(appContext)
     val saveResult = targetRepo.saveVoiceNoteRecord(note = note, transcription = aiResult)
 
-    return saveResult.fold(
-      onSuccess = {
-        Result.success(
-          aiResult.copy(
-            savedLocally = true,
-            notice = "تم حفظ النص والملخص والمهام محلياً على جهازك.",
-          )
-        )
-      },
-      onFailure = { saveError ->
+    val savedRecord =
+      saveResult.getOrElse { saveError ->
         Log.w(TAG, "Voice note transcription succeeded but local save failed", saveError)
-        Result.success(
+        return Result.success(
           aiResult.copy(
             savedLocally = false,
+            syncedToCloud = false,
             notice = "تم التفريغ بنجاح، ولكن تعذر الحفظ المحلي: ${saveError.localizedMessage ?: "خطأ"}",
           )
         )
-      },
+      }
+
+    val cloudSync = CloudSyncManager.getInstance(appContext)
+    val syncedUid =
+      if (cloudSync.syncState.value.isSignedIn) {
+        cloudSync.pushVoiceNoteRecord(savedRecord).getOrNull()
+      } else {
+        null
+      }
+
+    if (syncedUid != null) {
+      targetRepo.markVoiceNoteSynced(savedRecord.fileName, syncedUid)
+    }
+
+    return Result.success(
+      aiResult.copy(
+        savedLocally = true,
+        syncedToCloud = syncedUid != null,
+        notice =
+          if (syncedUid != null) {
+            "تم حفظ التفريغ محلياً ومزامنته مع السحابة بنجاح."
+          } else {
+            "تم حفظ النص والملخص والمهام محلياً على جهازك."
+          },
+      )
     )
   }
 

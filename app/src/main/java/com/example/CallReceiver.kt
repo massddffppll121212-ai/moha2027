@@ -34,11 +34,14 @@ class CallReceiver : BroadcastReceiver() {
 
       when (state) {
         TelephonyManager.EXTRA_STATE_RINGING -> {
-          prefs.edit()
-            .putString(KEY_PENDING_DIRECTION, "Incoming")
-            .putString(KEY_PENDING_NUMBER, incomingNumber)
-            .putLong(KEY_PENDING_TIMESTAMP, System.currentTimeMillis())
-            .apply()
+          val editor =
+            prefs.edit()
+              .putString(KEY_PENDING_DIRECTION, "Incoming")
+              .putLong(KEY_PENDING_TIMESTAMP, System.currentTimeMillis())
+          if (!incomingNumber.isNullOrBlank()) {
+            editor.putString(KEY_PENDING_NUMBER, incomingNumber)
+          }
+          editor.apply()
         }
 
         TelephonyManager.EXTRA_STATE_OFFHOOK -> {
@@ -60,6 +63,10 @@ class CallReceiver : BroadcastReceiver() {
           val number =
             incomingNumber?.takeIf { it.isNotBlank() }
               ?: if (isRecent) prefs.getString(KEY_PENDING_NUMBER, null) else null
+
+          if (CallVaultSettings.isNumberExcluded(context, number)) {
+            return
+          }
 
           if (!CallRecordingService.isRecordingFlow.value) {
             val serviceIntent =

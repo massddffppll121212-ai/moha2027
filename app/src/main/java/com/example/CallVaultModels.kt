@@ -1,6 +1,12 @@
 package com.example
 
 import android.net.Uri
+import androidx.annotation.Keep
+import com.google.firebase.Timestamp
+import com.google.firebase.firestore.DocumentId
+import com.google.firebase.firestore.Exclude
+import com.google.firebase.firestore.IgnoreExtraProperties
+import com.google.firebase.firestore.ServerTimestamp
 
 enum class VaultSection {
   CALLS,
@@ -48,8 +54,11 @@ data class VoiceNoteItem(
   val legacyFilePath: String? = null,
 )
 
+@Keep
+@IgnoreExtraProperties
 data class CallRecord(
-  val id: String = "",
+  @DocumentId val id: String = "",
+  val userId: String = "",
   val fileName: String = "",
   val callerName: String = "",
   val phoneNumber: String = "",
@@ -59,10 +68,16 @@ data class CallRecord(
   val transcript: String? = null,
   val summaryPoints: List<String>? = null,
   val actionItems: List<String>? = null,
+  @ServerTimestamp val createdAt: Timestamp? = null,
+  @ServerTimestamp val updatedAt: Timestamp? = null,
+  @get:Exclude val syncedToCloud: Boolean = false,
 )
 
+@Keep
+@IgnoreExtraProperties
 data class VoiceNoteRecord(
-  val id: String = "",
+  @DocumentId val id: String = "",
+  val userId: String = "",
   val fileName: String = "",
   val title: String = "",
   val durationMs: Long = 0L,
@@ -70,4 +85,7 @@ data class VoiceNoteRecord(
   val transcript: String? = null,
   val summaryPoints: List<String>? = null,
   val actionItems: List<String>? = null,
+  @ServerTimestamp val createdAt: Timestamp? = null,
+  @ServerTimestamp val updatedAt: Timestamp? = null,
+  @get:Exclude val syncedToCloud: Boolean = false,
 )

@@ -28,6 +28,7 @@ import java.util.Locale
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 object VoiceNotesMetadataStore {
   private const val PREFS_NAME = "callvault_voice_notes_meta"
@@ -213,8 +214,28 @@ class VoiceRecorderService : Service() {
         fileName != null
 
     if (hasValidAudio) {
-      saveToVoiceNotesFolder(sourceFile = tempFile, fileName = fileName)
+      val durationMs = extractDurationMs(tempFile)
+      val savedUri = saveToVoiceNotesFolder(sourceFile = tempFile, fileName = fileName)
       VoiceNotesMetadataStore.saveTitle(applicationContext, fileName, finalTitle)
+      if (CallVaultSettings.isVoiceTranscriptionEnabled(applicationContext)) {
+        val note =
+          VoiceNoteItem(
+            id = "auto_note_$fileName",
+            uri = savedUri,
+            fileName = fileName,
+            title = finalTitle,
+            timestampMs = if (startedAt > 0L) startedAt else System.currentTimeMillis(),
+            durationMs = durationMs,
+            sizeBytes = tempFile.length(),
+            legacyFilePath = if (savedUri.scheme == "file") savedUri.path else null,
+          )
+        val appCtx = applicationContext
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+          .launch {
+            TranscriptionHelper(repository = LocalCallVaultRepository.getInstance(appCtx))
+              .transcribeAndSaveVoiceNote(appCtx, note)
+          }
+      }
     }
 
     if (tempFile != null && tempFile.exists()) {

@@ -53,6 +53,9 @@ jobs:
           if [ ! -f app/google-services.json ] && [ -n "$GOOGLE_SERVICES_JSON" ]; then
             printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
           fi
+          if [ ! -f app/google-services.json ]; then
+            echo "::warning::app/google-services.json is missing! Firebase AI transcription and Cloud Sync require app/google-services.json or the GOOGLE_SERVICES_JSON repository secret."
+          fi
           if [ ! -f ./gradlew ]; then
             gradle wrapper --gradle-version 9.3.1
           fi

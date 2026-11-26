@@ -1,6 +1,7 @@
 package com.example
 
 import android.Manifest
+import android.app.Activity
 import android.content.ContentUris
 import android.content.Context
 import android.content.pm.PackageManager
@@ -8,7 +9,6 @@ import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
-import android.provider.CallLog
 import android.provider.MediaStore
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -18,12 +18,14 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import java.io.File
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -32,10 +34,11 @@ data class PermissionStatus(
   val recordAudioGranted: Boolean = false,
   val phoneStateGranted: Boolean = false,
   val callLogGranted: Boolean = false,
+  val contactsGranted: Boolean = false,
   val notificationsGranted: Boolean = true,
 ) {
   val allCoreGranted: Boolean
-    get() = recordAudioGranted && phoneStateGranted && callLogGranted
+    get() = recordAudioGranted && phoneStateGranted && callLogGranted && contactsGranted
 }
 
 data class CallVaultUiState(
@@ -57,12 +60,19 @@ data class CallVaultUiState(
   val playbackPositionMs: Long = 0L,
   val playbackDurationMs: Long = 0L,
   val waveformAmplitudes: List<Float> = emptyList(),
+  val transcribingItemIds: Set<String> = emptySet(),
+  val isBatchTranscribing: Boolean = false,
+  val isSelectionMode: Boolean = false,
+  val selectedCallIds: Set<String> = emptySet(),
+  val selectedNoteIds: Set<String> = emptySet(),
+  val cloudSyncState: CloudSyncState = CloudSyncState(),
   val statusMessage: String? = null,
 )
 
 class CallVaultViewModel(
   private val appContext: Context,
   val repository: LocalCallVaultRepository,
+  val cloudSyncManager: CloudSyncManager,
 ) : ViewModel() {
 
   private val _uiState = MutableStateFlow(CallVaultUiState())
@@ -73,12 +83,73 @@ class CallVaultViewModel(
   private var waveformExtractionJob: Job? = null
   private val waveformCache = mutableMapOf<String, List<Float>>()
   private var callRecordingTickerJob: Job? = null
+  private var cloudListenersJob: Job? = null
+  private var observedCloudUid: String? = null
 
   init {
     refreshPermissions()
     observeLocalTranscriptions()
+    observeCloudSync()
     loadAllSections()
     observeServices()
+    restoreOptionalCloudSession()
+  }
+
+  private fun restoreOptionalCloudSession() {
+    viewModelScope.launch {
+      if (cloudSyncManager.attemptSilentRestoreIfEnabled()) {
+        cloudSyncManager.syncAllWithCloud(repository)
+      }
+    }
+  }
+
+  private fun observeCloudSync() {
+    viewModelScope.launch {
+      cloudSyncManager.syncState.collect { syncState ->
+        _uiState.update { it.copy(cloudSyncState = syncState) }
+        val uid = syncState.userId?.takeIf { syncState.isSignedIn && it.isNotBlank() }
+        if (uid != observedCloudUid) {
+          cloudListenersJob?.cancel()
+          cloudListenersJob = null
+          observedCloudUid = uid
+          if (uid != null) {
+            startCloudListeners(uid)
+          }
+        }
+      }
+    }
+  }
+
+  private fun startCloudListeners(uid: String) {
+    cloudListenersJob =
+      viewModelScope.launch {
+        launch {
+          cloudSyncManager
+            .observeCloudCalls()
+            .catch { error ->
+              if (error is CancellationException) throw error
+              Log.w(TAG, "Cloud calls listener stopped: ${error.localizedMessage}")
+            }
+            .collect { cloudCalls ->
+              if (cloudSyncManager.syncState.value.userId == uid) {
+                repository.mergeCloudCalls(cloudCalls)
+              }
+            }
+        }
+        launch {
+          cloudSyncManager
+            .observeCloudVoiceNotes()
+            .catch { error ->
+              if (error is CancellationException) throw error
+              Log.w(TAG, "Cloud voice notes listener stopped: ${error.localizedMessage}")
+            }
+            .collect { cloudNotes ->
+              if (cloudSyncManager.syncState.value.userId == uid) {
+                repository.mergeCloudVoiceNotes(cloudNotes)
+              }
+            }
+        }
+      }
   }
 
   private fun observeLocalTranscriptions() {
@@ -166,6 +237,9 @@ class CallVaultViewModel(
     val callLog =
       ContextCompat.checkSelfPermission(appContext, Manifest.permission.READ_CALL_LOG) ==
         PackageManager.PERMISSION_GRANTED
+    val contacts =
+      ContextCompat.checkSelfPermission(appContext, Manifest.permission.READ_CONTACTS) ==
+        PackageManager.PERMISSION_GRANTED
     val notifications =
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) ==
@@ -181,6 +255,7 @@ class CallVaultViewModel(
             recordAudioGranted = recordAudio,
             phoneStateGranted = phoneState,
             callLogGranted = callLog,
+            contactsGranted = contacts,
             notificationsGranted = notifications,
           )
       )
@@ -188,7 +263,81 @@ class CallVaultViewModel(
   }
 
   fun setSection(section: VaultSection) {
-    _uiState.update { it.copy(activeSection = section, expandedItemId = null) }
+    _uiState.update {
+      it.copy(
+        activeSection = section,
+        expandedItemId = null,
+        isSelectionMode = false,
+        selectedCallIds = emptySet(),
+        selectedNoteIds = emptySet(),
+      )
+    }
+  }
+
+  fun enterSelectionMode(initialItemId: String? = null) {
+    _uiState.update { state ->
+      if (state.activeSection == VaultSection.CALLS) {
+        val next =
+          if (initialItemId != null) state.selectedCallIds + initialItemId else state.selectedCallIds
+        state.copy(isSelectionMode = true, selectedCallIds = next)
+      } else {
+        val next =
+          if (initialItemId != null) state.selectedNoteIds + initialItemId else state.selectedNoteIds
+        state.copy(isSelectionMode = true, selectedNoteIds = next)
+      }
+    }
+  }
+
+  fun exitSelectionMode() {
+    _uiState.update {
+      it.copy(
+        isSelectionMode = false,
+        selectedCallIds = emptySet(),
+        selectedNoteIds = emptySet(),
+      )
+    }
+  }
+
+  fun toggleItemSelection(itemId: String) {
+    _uiState.update { state ->
+      if (state.activeSection == VaultSection.CALLS) {
+        val next =
+          if (state.selectedCallIds.contains(itemId)) {
+            state.selectedCallIds - itemId
+          } else {
+            state.selectedCallIds + itemId
+          }
+        state.copy(isSelectionMode = true, selectedCallIds = next)
+      } else {
+        val next =
+          if (state.selectedNoteIds.contains(itemId)) {
+            state.selectedNoteIds - itemId
+          } else {
+            state.selectedNoteIds + itemId
+          }
+        state.copy(isSelectionMode = true, selectedNoteIds = next)
+      }
+    }
+  }
+
+  fun selectAllInActiveSection(visibleIds: List<String>) {
+    _uiState.update { state ->
+      if (state.activeSection == VaultSection.CALLS) {
+        state.copy(isSelectionMode = true, selectedCallIds = visibleIds.toSet())
+      } else {
+        state.copy(isSelectionMode = true, selectedNoteIds = visibleIds.toSet())
+      }
+    }
+  }
+
+  fun deselectAllInActiveSection() {
+    _uiState.update { state ->
+      if (state.activeSection == VaultSection.CALLS) {
+        state.copy(selectedCallIds = emptySet())
+      } else {
+        state.copy(selectedNoteIds = emptySet())
+      }
+    }
   }
 
   fun setFilter(filter: CallDirection) {
@@ -227,6 +376,134 @@ class CallVaultViewModel(
       val savedMap = _uiState.value.savedVoiceNotes
       val noteItems = withContext(Dispatchers.IO) { queryVoiceNotes(appContext, savedMap) }
       _uiState.update { it.copy(voiceNotes = noteItems) }
+    }
+  }
+
+  suspend fun transcribeCallSuspend(item: CallRecordingItem): Result<TranscriptionResult> {
+    _uiState.update { it.copy(transcribingItemIds = it.transcribingItemIds + item.id) }
+    return try {
+      TranscriptionHelper(repository = repository).transcribeAndSaveCall(appContext, item, repository)
+    } finally {
+      _uiState.update { it.copy(transcribingItemIds = it.transcribingItemIds - item.id) }
+    }
+  }
+
+  suspend fun transcribeVoiceNoteSuspend(note: VoiceNoteItem): Result<TranscriptionResult> {
+    _uiState.update { it.copy(transcribingItemIds = it.transcribingItemIds + note.id) }
+    return try {
+      TranscriptionHelper(repository = repository).transcribeAndSaveVoiceNote(appContext, note, repository)
+    } finally {
+      _uiState.update { it.copy(transcribingItemIds = it.transcribingItemIds - note.id) }
+    }
+  }
+
+  fun transcribeAllPendingAndSync() {
+    if (_uiState.value.isBatchTranscribing) return
+    viewModelScope.launch {
+      _uiState.update {
+        it.copy(isBatchTranscribing = true, statusMessage = "جاري تحويل ومزامنة التسجيلات...")
+      }
+      var transcribedCount = 0
+      var firstError: String? = null
+      val helper = TranscriptionHelper(repository = repository)
+
+      val pendingCalls =
+        _uiState.value.calls.filter { call ->
+          _uiState.value.savedCalls[call.fileName]?.transcript.isNullOrBlank()
+        }
+      for (call in pendingCalls) {
+        _uiState.update { it.copy(transcribingItemIds = it.transcribingItemIds + call.id) }
+        val res = helper.transcribeAndSaveCall(appContext, call, repository)
+        _uiState.update { it.copy(transcribingItemIds = it.transcribingItemIds - call.id) }
+        if (res.isSuccess) {
+          transcribedCount++
+        } else if (firstError == null) {
+          firstError = res.exceptionOrNull()?.message
+        }
+      }
+
+      val pendingNotes =
+        _uiState.value.voiceNotes.filter { note ->
+          _uiState.value.savedVoiceNotes[note.fileName]?.transcript.isNullOrBlank()
+        }
+      for (note in pendingNotes) {
+        _uiState.update { it.copy(transcribingItemIds = it.transcribingItemIds + note.id) }
+        val res = helper.transcribeAndSaveVoiceNote(appContext, note, repository)
+        _uiState.update { it.copy(transcribingItemIds = it.transcribingItemIds - note.id) }
+        if (res.isSuccess) {
+          transcribedCount++
+        } else if (firstError == null) {
+          firstError = res.exceptionOrNull()?.message
+        }
+      }
+
+      val cloudMessage =
+        if (cloudSyncManager.syncState.value.isSignedIn) {
+          cloudSyncManager.syncAllWithCloud(repository).fold(
+            onSuccess = { uploaded -> " وتمت مزامنة $uploaded سجل مع السحابة." },
+            onFailure = { err -> " (تعذرت المزامنة السحابية: ${err.localizedMessage ?: "خطأ"})" },
+          )
+        } else {
+          ""
+        }
+
+      _uiState.update {
+        it.copy(
+          isBatchTranscribing = false,
+          statusMessage =
+            when {
+              transcribedCount > 0 -> "تم تفريغ $transcribedCount تسجيل وحفظه بنجاح.$cloudMessage"
+              firstError != null -> firstError
+              cloudMessage.isNotBlank() -> "جميع التسجيلات مفرّغة مسبقاً.$cloudMessage"
+              else -> "جميع التسجيلات مفرّغة ومحفوظة محلياً بالفعل."
+            },
+        )
+      }
+    }
+  }
+
+  fun syncCloudOnly() {
+    viewModelScope.launch {
+      cloudSyncManager
+        .syncAllWithCloud(repository)
+        .onSuccess { count ->
+          _uiState.update {
+            it.copy(statusMessage = "تمت المزامنة السحابية بنجاح ($count عنصر محدّث).")
+          }
+        }
+        .onFailure { err ->
+          _uiState.update {
+            it.copy(statusMessage = err.localizedMessage ?: "تعذرت المزامنة السحابية.")
+          }
+        }
+    }
+  }
+
+  fun connectGoogleForCloudSync(activity: Activity) {
+    viewModelScope.launch {
+      cloudSyncManager
+        .signInWithGoogleForSync(activity)
+        .onSuccess { email ->
+          cloudSyncManager.syncAllWithCloud(repository)
+          _uiState.update {
+            it.copy(statusMessage = "تم ربط حساب $email وتفعيل المزامنة السحابية.")
+          }
+        }
+        .onFailure { err ->
+          _uiState.update {
+            it.copy(statusMessage = err.localizedMessage ?: "تعذر ربط الحساب للمزامنة.")
+          }
+        }
+    }
+  }
+
+  fun disconnectCloudSync() {
+    viewModelScope.launch {
+      cloudListenersJob?.cancel()
+      cloudListenersJob = null
+      observedCloudUid = null
+      cloudSyncManager.disconnectCloudSync(repository)
+      _uiState.update { it.copy(statusMessage = "تم فصل المزامنة السحابية. التسجيلات محفوظة محلياً.") }
     }
   }
 
@@ -349,26 +626,43 @@ class CallVaultViewModel(
       stopPlayback()
     }
     viewModelScope.launch(Dispatchers.IO) {
-      val deleted =
-        try {
-          if (item.legacyFilePath != null) {
-            File(item.legacyFilePath).delete()
-          } else {
-            appContext.contentResolver.delete(item.uri, null, null) > 0
-          }
-        } catch (_: Exception) {
-          false
-        }
-
-      if (deleted) {
-        repository.deleteCallRecord(item.fileName)
-      }
-
+      val deleted = deleteCallFileAndMetadata(item)
       val updated = queryCalls(appContext)
       _uiState.update {
         it.copy(
           calls = updated,
+          selectedCallIds = it.selectedCallIds - item.id,
           statusMessage = if (deleted) "تم حذف المكالمة." else "تعذر حذف المكالمة.",
+        )
+      }
+    }
+  }
+
+  fun deleteCalls(items: List<CallRecordingItem>) {
+    if (items.isEmpty()) return
+    val currentPlaying = _uiState.value.playingItemId
+    if (currentPlaying != null && items.any { it.id == currentPlaying }) {
+      stopPlayback()
+    }
+    viewModelScope.launch(Dispatchers.IO) {
+      var deletedCount = 0
+      for (item in items) {
+        if (deleteCallFileAndMetadata(item)) {
+          deletedCount++
+        }
+      }
+      val updated = queryCalls(appContext)
+      _uiState.update {
+        it.copy(
+          calls = updated,
+          isSelectionMode = false,
+          selectedCallIds = emptySet(),
+          statusMessage =
+            if (deletedCount > 0) {
+              "تم حذف $deletedCount مكالمة بنجاح."
+            } else {
+              "تعذر حذف المكالمات المحددة."
+            },
         )
       }
     }
@@ -379,29 +673,146 @@ class CallVaultViewModel(
       stopPlayback()
     }
     viewModelScope.launch(Dispatchers.IO) {
-      val deleted =
-        try {
-          if (note.legacyFilePath != null) {
-            File(note.legacyFilePath).delete()
-          } else {
-            appContext.contentResolver.delete(note.uri, null, null) > 0
-          }
-        } catch (_: Exception) {
-          false
-        }
-
-      if (deleted) {
-        repository.deleteVoiceNoteRecord(note.fileName)
-      }
-
+      val deleted = deleteVoiceNoteFileAndMetadata(note)
       val updated = queryVoiceNotes(appContext, _uiState.value.savedVoiceNotes)
       _uiState.update {
         it.copy(
           voiceNotes = updated,
+          selectedNoteIds = it.selectedNoteIds - note.id,
           statusMessage = if (deleted) "تم حذف التسجيل الصوتي." else "تعذر حذف التسجيل الصوتي.",
         )
       }
     }
+  }
+
+  fun deleteVoiceNotes(notes: List<VoiceNoteItem>) {
+    if (notes.isEmpty()) return
+    val currentPlaying = _uiState.value.playingItemId
+    if (currentPlaying != null && notes.any { it.id == currentPlaying }) {
+      stopPlayback()
+    }
+    viewModelScope.launch(Dispatchers.IO) {
+      var deletedCount = 0
+      for (note in notes) {
+        if (deleteVoiceNoteFileAndMetadata(note)) {
+          deletedCount++
+        }
+      }
+      val updated = queryVoiceNotes(appContext, _uiState.value.savedVoiceNotes)
+      _uiState.update {
+        it.copy(
+          voiceNotes = updated,
+          isSelectionMode = false,
+          selectedNoteIds = emptySet(),
+          statusMessage =
+            if (deletedCount > 0) {
+              "تم حذف $deletedCount تسجيل صوتي بنجاح."
+            } else {
+              "تعذر حذف التسجيلات المحددة."
+            },
+        )
+      }
+    }
+  }
+
+  fun deleteShortRecordings(maxDurationSeconds: Int, section: VaultSection) {
+    val cleanSec = maxDurationSeconds.coerceIn(1, 3600)
+    val thresholdMs = cleanSec * 1000L
+
+    if (section == VaultSection.CALLS) {
+      val targets = _uiState.value.calls.filter { it.durationMs < thresholdMs }
+      if (targets.isEmpty()) {
+        _uiState.update {
+          it.copy(statusMessage = "لا توجد مكالمات أقصر من $cleanSec ثانية.")
+        }
+        return
+      }
+      val playingId = _uiState.value.playingItemId
+      if (playingId != null && targets.any { it.id == playingId }) {
+        stopPlayback()
+      }
+      viewModelScope.launch(Dispatchers.IO) {
+        var deletedCount = 0
+        for (item in targets) {
+          if (deleteCallFileAndMetadata(item)) {
+            deletedCount++
+          }
+        }
+        val updated = queryCalls(appContext)
+        _uiState.update {
+          it.copy(
+            calls = updated,
+            selectedCallIds = it.selectedCallIds - targets.map { t -> t.id }.toSet(),
+            statusMessage = "تم حذف $deletedCount مكالمة أقصر من $cleanSec ثانية.",
+          )
+        }
+      }
+    } else {
+      val targets = _uiState.value.voiceNotes.filter { it.durationMs < thresholdMs }
+      if (targets.isEmpty()) {
+        _uiState.update {
+          it.copy(statusMessage = "لا توجد تسجيلات صوتية أقصر من $cleanSec ثانية.")
+        }
+        return
+      }
+      val playingId = _uiState.value.playingItemId
+      if (playingId != null && targets.any { it.id == playingId }) {
+        stopPlayback()
+      }
+      viewModelScope.launch(Dispatchers.IO) {
+        var deletedCount = 0
+        for (note in targets) {
+          if (deleteVoiceNoteFileAndMetadata(note)) {
+            deletedCount++
+          }
+        }
+        val updated = queryVoiceNotes(appContext, _uiState.value.savedVoiceNotes)
+        _uiState.update {
+          it.copy(
+            voiceNotes = updated,
+            selectedNoteIds = it.selectedNoteIds - targets.map { t -> t.id }.toSet(),
+            statusMessage = "تم حذف $deletedCount تسجيل صوتي أقصر من $cleanSec ثانية.",
+          )
+        }
+      }
+    }
+  }
+
+  private suspend fun deleteCallFileAndMetadata(item: CallRecordingItem): Boolean {
+    val deleted =
+      try {
+        if (item.legacyFilePath != null) {
+          File(item.legacyFilePath).delete()
+        } else {
+          appContext.contentResolver.delete(item.uri, null, null) > 0
+        }
+      } catch (_: Exception) {
+        false
+      }
+
+    if (deleted) {
+      repository.deleteCallRecord(item.fileName)
+      CallMetadataStore.deleteMetadata(appContext, item.fileName)
+    }
+    return deleted
+  }
+
+  private suspend fun deleteVoiceNoteFileAndMetadata(note: VoiceNoteItem): Boolean {
+    val deleted =
+      try {
+        if (note.legacyFilePath != null) {
+          File(note.legacyFilePath).delete()
+        } else {
+          appContext.contentResolver.delete(note.uri, null, null) > 0
+        }
+      } catch (_: Exception) {
+        false
+      }
+
+    if (deleted) {
+      repository.deleteVoiceNoteRecord(note.fileName)
+    }
+    return deleted
   }
 
   private fun startPlaybackTicker() {
@@ -452,6 +863,7 @@ class CallVaultViewModel(
   override fun onCleared() {
     stopPlayback()
     callRecordingTickerJob?.cancel()
+    cloudListenersJob?.cancel()
     super.onCleared()
   }
 
@@ -681,21 +1093,48 @@ class CallVaultViewModel(
     val cleanName = fileName.removeSuffix(".mp3")
     val parts = cleanName.split("_")
     val directionTag = parts.getOrNull(1).orEmpty()
+    val savedMeta = CallMetadataStore.getMetadata(appContext, fileName)
+    val savedRecord = repository.callsFlow.value[fileName]
+
+    val effectiveDirTag = savedMeta?.direction?.takeIf { it.isNotBlank() } ?: directionTag
     val direction =
-      if (directionTag.equals("Incoming", ignoreCase = true)) {
+      if (effectiveDirTag.equals("Incoming", ignoreCase = true)) {
         CallDirection.INCOMING
       } else {
         CallDirection.OUTGOING
       }
 
-    val extractedNumber = if (parts.size >= 5) parts[2] else ""
-    val cachedName =
-      if (extractedNumber.isNotBlank()) lookupCallerName(appContext, extractedNumber) else null
-    val callerName =
-      cachedName
-        ?: if (direction == CallDirection.INCOMING) "متصل وارد" else "اتصال صادر"
-    val phoneNumber =
-      if (extractedNumber.isNotBlank()) extractedNumber else "رقم غير معروف"
+    val extractedNumber =
+      savedMeta?.phoneNumber?.takeIf { it.isNotBlank() && it != "رقم غير معروف" }
+        ?: (if (parts.size >= 5) parts[2] else "")
+          .ifBlank {
+            savedRecord?.phoneNumber?.takeIf { it.isNotBlank() && it != "رقم غير معروف" }.orEmpty()
+          }
+
+    val genericLabels = setOf("متصل وارد", "اتصال صادر")
+    val savedMetaName = savedMeta?.callerName?.takeIf { it.isNotBlank() && it !in genericLabels }
+    val savedRecordName = savedRecord?.callerName?.takeIf { it.isNotBlank() && it !in genericLabels }
+    val liveName =
+      if (savedMetaName == null && extractedNumber.isNotBlank()) {
+        CallMetadataStore.resolveCallerName(appContext, extractedNumber)
+      } else {
+        null
+      }
+
+    val fallbackLabel = if (direction == CallDirection.INCOMING) "متصل وارد" else "اتصال صادر"
+    val callerName = savedMetaName ?: liveName ?: savedRecordName ?: fallbackLabel
+    val phoneNumber = if (extractedNumber.isNotBlank()) extractedNumber else "رقم غير معروف"
+
+    // Persist resolved caller name permanently so future call-log clears never lose it
+    if (savedMetaName == null && (liveName != null || savedRecordName != null)) {
+      CallMetadataStore.saveMetadata(
+        context = appContext,
+        fileName = fileName,
+        callerName = callerName,
+        phoneNumber = phoneNumber,
+        direction = if (direction == CallDirection.INCOMING) "Incoming" else "Outgoing",
+      )
+    }
 
     return CallRecordingItem(
       id = id,
@@ -711,34 +1150,9 @@ class CallVaultViewModel(
     )
   }
 
-  private fun lookupCallerName(context: Context, number: String): String? {
-    val hasCallLog =
-      ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALL_LOG) ==
-        PackageManager.PERMISSION_GRANTED
-    if (!hasCallLog) return null
-
-    return try {
-      context.contentResolver
-        .query(
-          CallLog.Calls.CONTENT_URI,
-          arrayOf(CallLog.Calls.CACHED_NAME),
-          "${CallLog.Calls.NUMBER} LIKE ?",
-          arrayOf("%${number.takeLast(8)}%"),
-          "${CallLog.Calls.DATE} DESC",
-        )
-        ?.use { cursor ->
-          if (cursor.moveToFirst()) {
-            cursor.getString(0)?.takeIf { it.isNotBlank() }
-          } else {
-            null
-          }
-        }
-    } catch (_: Exception) {
-      null
-    }
-  }
-
   companion object {
+    private const val TAG = "CallVaultViewModel"
+
     fun provideFactory(): ViewModelProvider.Factory = viewModelFactory {
       initializer {
         val app =
@@ -747,7 +1161,8 @@ class CallVaultViewModel(
           }
         CallVaultViewModel(
           appContext = app.applicationContext,
-          repository = LocalCallVaultRepository(app.applicationContext),
+          repository = LocalCallVaultRepository.getInstance(app.applicationContext),
+          cloudSyncManager = CloudSyncManager.getInstance(app.applicationContext),
         )
       }
     }

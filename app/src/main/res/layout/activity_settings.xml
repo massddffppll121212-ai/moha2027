@@ -49,7 +49,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:text="إعدادات المكالمات والتسجيل الصوتي منفصلة"
+                android:text="إعدادات المكالمات والتسجيل الصوتي والمزامنة"
                 android:textColor="#60A5FA"
                 android:textSize="12sp" />
         </LinearLayout>
@@ -181,6 +181,57 @@
                     android:layout_marginVertical="12dp"
                     android:background="#1E293B" />
 
+                <!-- 2. التفريغ التلقائي للمكالمات -->
+                <LinearLayout
+                    android:id="@+id/row_auto_call_transcription"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:minHeight="56dp"
+                    android:orientation="horizontal"
+                    android:paddingVertical="4dp">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="12dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="التفريغ التلقائي للمكالمات لنص"
+                            android:textColor="#F8FAFC"
+                            android:textSize="15sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="3dp"
+                            android:text="تحويل المكالمة لنص تلقائياً فور انتهائها (الزر اليدوي مثبّت دائماً)"
+                            android:textColor="#94A3B8"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <Switch
+                        android:id="@+id/switch_auto_call_transcription"
+                        android:layout_width="wrap_content"
+                        android:layout_height="48dp"
+                        android:contentDescription="تشغيل أو إيقاف التفريغ التلقائي للمكالمات"
+                        android:minWidth="56dp"
+                        android:minHeight="48dp" />
+                </LinearLayout>
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginVertical="12dp"
+                    android:background="#1E293B" />
+
                 <!-- 3. اختيار جودة التسجيل: عالية / متوسطة -->
                 <TextView
                     android:layout_width="wrap_content"
@@ -234,6 +285,171 @@
                         android:text="متوسطة"
                         android:textColor="#94A3B8"
                         android:textSize="14sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginVertical="14dp"
+                    android:background="#1E293B" />
+
+                <!-- 4. التسجيل من الميكروفون والسماعة معاً -->
+                <LinearLayout
+                    android:id="@+id/row_call_speaker_recording"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:minHeight="56dp"
+                    android:orientation="horizontal"
+                    android:paddingVertical="4dp">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="12dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="التسجيل من الميكروفون والسماعة معاً"
+                            android:textColor="#F8FAFC"
+                            android:textSize="15sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="3dp"
+                            android:text="التقاط صوتك وصوت المتصل من السماعة تلقائياً أثناء المكالمة"
+                            android:textColor="#94A3B8"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <Switch
+                        android:id="@+id/switch_call_speaker_recording"
+                        android:layout_width="wrap_content"
+                        android:layout_height="48dp"
+                        android:contentDescription="تفعيل التسجيل من الميكروفون والسماعة معاً"
+                        android:minWidth="56dp"
+                        android:minHeight="48dp" />
+                </LinearLayout>
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginVertical="12dp"
+                    android:background="#1E293B" />
+
+                <!-- 5. قائمة الأرقام المستبعدة من التسجيل -->
+                <LinearLayout
+                    android:id="@+id/row_excluded_numbers"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:minHeight="56dp"
+                    android:orientation="horizontal"
+                    android:paddingVertical="4dp">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="12dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="الأرقام المستبعدة من التسجيل"
+                            android:textColor="#F8FAFC"
+                            android:textSize="15sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tv_excluded_numbers_count"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="3dp"
+                            android:text="لا توجد أرقام مستبعدة حالياً"
+                            android:textColor="#94A3B8"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="48dp"
+                        android:background="@drawable/bg_pill_unselected"
+                        android:gravity="center"
+                        android:minWidth="64dp"
+                        android:minHeight="48dp"
+                        android:paddingHorizontal="14dp"
+                        android:text="إدارة"
+                        android:textColor="#38BDF8"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginVertical="12dp"
+                    android:background="#1E293B" />
+
+                <!-- 6. حد مدة التسجيلات القصيرة -->
+                <LinearLayout
+                    android:id="@+id/row_short_threshold"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:minHeight="56dp"
+                    android:orientation="horizontal"
+                    android:paddingVertical="4dp">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="12dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="حد حذف التسجيلات القصيرة"
+                            android:textColor="#F8FAFC"
+                            android:textSize="15sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tv_short_threshold_value"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="3dp"
+                            android:text="أقصر من 10 ثانية"
+                            android:textColor="#94A3B8"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="48dp"
+                        android:background="@drawable/bg_pill_unselected"
+                        android:gravity="center"
+                        android:minWidth="64dp"
+                        android:minHeight="48dp"
+                        android:paddingHorizontal="14dp"
+                        android:text="تعديل"
+                        android:textColor="#38BDF8"
+                        android:textSize="13sp"
                         android:textStyle="bold" />
                 </LinearLayout>
             </LinearLayout>
@@ -293,7 +509,7 @@
                     android:layout_marginVertical="14dp"
                     android:background="#1E293B" />
 
-                <!-- 1. تشغيل / إيقاف تحويل الصوت لنص -->
+                <!-- 1. تشغيل / إيقاف التفريغ التلقائي للتسجيل الصوتي -->
                 <LinearLayout
                     android:id="@+id/row_voice_transcription"
                     android:layout_width="match_parent"
@@ -315,7 +531,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="تحويل الصوت لنص"
+                            android:text="التفريغ التلقائي للصوت لنص"
                             android:textColor="#F8FAFC"
                             android:textSize="15sp"
                             android:textStyle="bold" />
@@ -324,7 +540,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="3dp"
-                            android:text="إظهار وتفعيل ميزة التفريغ النصي في التسجيلات الصوتية"
+                            android:text="تحويل التسجيل الصوتي تلقائياً بعد الحفظ (الزر اليدوي مثبّت دائماً)"
                             android:textColor="#94A3B8"
                             android:textSize="12sp" />
                     </LinearLayout>
@@ -333,7 +549,7 @@
                         android:id="@+id/switch_voice_transcription"
                         android:layout_width="wrap_content"
                         android:layout_height="48dp"
-                        android:contentDescription="تشغيل أو إيقاف تحويل الصوت لنص"
+                        android:contentDescription="تشغيل أو إيقاف التفريغ التلقائي للصوت"
                         android:minWidth="56dp"
                         android:minHeight="48dp" />
                 </LinearLayout>
@@ -356,9 +572,95 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="3dp"
-                    android:text="يتم حفظ جميع التسجيلات الصوتية على الهاتف مباشرة في مجلد CallVault/VoiceNotes دون الحاجة لتسجيل الدخول."
+                    android:text="يتم حفظ جميع التسجيلات والنصوص محلياً على الهاتف مباشرة بدون إجبار تسجيل الدخول."
                     android:textColor="#94A3B8"
                     android:textSize="12sp" />
+            </LinearLayout>
+
+            <!-- قسم 3: المزامنة السحابية الاختيارية عبر Firebase -->
+            <LinearLayout
+                android:id="@+id/section_cloud_sync_settings"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:background="@drawable/bg_card_dark"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <ImageView
+                        android:layout_width="42dp"
+                        android:layout_height="42dp"
+                        android:background="@drawable/bg_circle_surface"
+                        android:contentDescription="المزامنة السحابية"
+                        android:padding="10dp"
+                        android:src="@drawable/ic_cloud_sync" />
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="12dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="المزامنة السحابية (اختياري)"
+                            android:textColor="#38BDF8"
+                            android:textSize="16sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tv_cloud_sync_status"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="الوضع الحالي: حفظ محلي فقط بدون حساب"
+                            android:textColor="#94A3B8"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="اربط حساب Google فقط إذا رغبت بمزامنة النصوص والملخصات بين أجهزتك عبر Firestore."
+                    android:textColor="#94A3B8"
+                    android:textSize="12sp" />
+
+                <Button
+                    android:id="@+id/btn_cloud_sync_primary"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="12dp"
+                    android:background="@drawable/bg_pill_selected"
+                    android:minHeight="48dp"
+                    android:text="ربط حساب Google للمزامنة"
+                    android:textAllCaps="false"
+                    android:textColor="#FFFFFF"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/btn_cloud_sync_disconnect"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/bg_pill_unselected"
+                    android:minHeight="48dp"
+                    android:text="فصل المزامنة السحابية"
+                    android:textAllCaps="false"
+                    android:textColor="#FCA5A5"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:visibility="gone" />
             </LinearLayout>
 
             <Button

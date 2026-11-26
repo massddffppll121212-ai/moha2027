@@ -3,6 +3,7 @@ package com.example
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.AlertDialog
+import android.app.DatePickerDialog
 import android.app.Dialog
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -14,6 +15,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.text.Editable
+import android.text.InputType
 import android.text.TextWatcher
 import android.view.View
 import android.view.ViewGroup
@@ -28,15 +30,20 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import java.io.File
+import java.util.Calendar
+import java.util.Locale
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -51,9 +58,20 @@ class MainActivity : ComponentActivity() {
   private lateinit var tabVoiceNotes: TextView
   private lateinit var searchContainer: LinearLayout
   private lateinit var etSearch: EditText
+  private lateinit var btnPickDateFilter: ImageButton
+  private lateinit var btnClearSearch: ImageButton
   private lateinit var tvStatusTitle: TextView
   private lateinit var tvStatusSubtitle: TextView
   private lateinit var btnGrantPermissions: Button
+  private lateinit var toolsBar: LinearLayout
+  private lateinit var btnEnterSelectAll: Button
+  private lateinit var btnDeleteShort: Button
+  private lateinit var selectionActionBar: LinearLayout
+  private lateinit var tvSelectionCount: TextView
+  private lateinit var btnSelectAllToggle: Button
+  private lateinit var btnExitSelection: ImageButton
+  private lateinit var btnShareSelected: Button
+  private lateinit var btnDeleteSelected: Button
   private lateinit var filterBar: LinearLayout
   private lateinit var filterAll: TextView
   private lateinit var filterIncoming: TextView
@@ -73,12 +91,15 @@ class MainActivity : ComponentActivity() {
 
   private var hasAutoRequestedPermissions = false
   private var isUserSeeking = false
+  private var latestFilteredCalls: List<CallRecordingItem> = emptyList()
+  private var latestFilteredNotes: List<VoiceNoteItem> = emptyList()
 
   private val requiredPermissions: Array<String> by lazy {
     buildList {
       add(Manifest.permission.RECORD_AUDIO)
       add(Manifest.permission.READ_PHONE_STATE)
       add(Manifest.permission.READ_CALL_LOG)
+      add(Manifest.permission.READ_CONTACTS)
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         add(Manifest.permission.POST_NOTIFICATIONS)
       }
@@ -106,6 +127,7 @@ class MainActivity : ComponentActivity() {
     bindViews()
     applyWindowInsets()
     setupInteractions()
+    setupBackHandler()
     observeState()
     requestCorePermissionsIfNeeded()
   }
@@ -113,6 +135,7 @@ class MainActivity : ComponentActivity() {
   override fun onResume() {
     super.onResume()
     viewModel.refreshPermissions()
+    viewModel.cloudSyncManager.refreshAuthState()
     viewModel.loadAllSections()
     renderState(viewModel.uiState.value)
   }
@@ -125,9 +148,20 @@ class MainActivity : ComponentActivity() {
     tabVoiceNotes = findViewById(R.id.tab_voice_notes)
     searchContainer = findViewById(R.id.search_container)
     etSearch = findViewById(R.id.et_search)
+    btnPickDateFilter = findViewById(R.id.btn_pick_date_filter)
+    btnClearSearch = findViewById(R.id.btn_clear_search)
     tvStatusTitle = findViewById(R.id.tv_status_title)
     tvStatusSubtitle = findViewById(R.id.tv_status_subtitle)
     btnGrantPermissions = findViewById(R.id.btn_grant_permissions)
+    toolsBar = findViewById(R.id.tools_bar)
+    btnEnterSelectAll = findViewById(R.id.btn_enter_select_all)
+    btnDeleteShort = findViewById(R.id.btn_delete_short)
+    selectionActionBar = findViewById(R.id.selection_action_bar)
+    tvSelectionCount = findViewById(R.id.tv_selection_count)
+    btnSelectAllToggle = findViewById(R.id.btn_select_all_toggle)
+    btnExitSelection = findViewById(R.id.btn_exit_selection)
+    btnShareSelected = findViewById(R.id.btn_share_selected)
+    btnDeleteSelected = findViewById(R.id.btn_delete_selected)
     filterBar = findViewById(R.id.filter_bar)
     filterAll = findViewById(R.id.filter_all)
     filterIncoming = findViewById(R.id.filter_incoming)
@@ -147,7 +181,9 @@ class MainActivity : ComponentActivity() {
 
     callsAdapter =
       RecordingsAdapter(
-        onCardClick = { item -> viewModel.toggleExpandedItem(item.id) },
+        onCardClick = { item -> showCallTranscriptionDialog(item) },
+        onCardLongClick = { item -> viewModel.enterSelectionMode(item.id) },
+        onToggleSelect = { item -> viewModel.toggleItemSelection(item.id) },
         onPlayClick = { item -> viewModel.toggleCallPlayback(item) },
         onShareClick = { item -> shareAudio(item.uri, item.legacyFilePath, item.fileName) },
         onDeleteClick = { item -> confirmDeleteCall(item) },
@@ -157,7 +193,9 @@ class MainActivity : ComponentActivity() {
 
     voiceNotesAdapter =
       VoiceNotesAdapter(
-        onCardClick = { note -> viewModel.toggleExpandedItem(note.id) },
+        onCardClick = { note -> showVoiceNoteTranscriptionDialog(note) },
+        onCardLongClick = { note -> viewModel.enterSelectionMode(note.id) },
+        onToggleSelect = { note -> viewModel.toggleItemSelection(note.id) },
         onPlayClick = { note -> viewModel.toggleVoiceNotePlayback(note) },
         onShareClick = { note -> shareAudio(note.uri, note.legacyFilePath, note.fileName) },
         onDeleteClick = { note -> confirmDeleteVoiceNote(note) },
@@ -188,24 +226,24 @@ class MainActivity : ComponentActivity() {
       startActivity(Intent(this, SettingsActivity::class.java))
     }
 
+    val btnSync = findViewById<ImageButton>(R.id.btn_sync)
+    btnSync.setOnClickListener { showSyncOptionsDialog() }
+
     val btnSearch = findViewById<ImageButton>(R.id.btn_search)
-    val btnClearSearch = findViewById<ImageButton>(R.id.btn_clear_search)
     val btnRefresh = findViewById<ImageButton>(R.id.btn_refresh)
 
     btnSearch.setOnClickListener {
-      if (searchContainer.visibility == View.VISIBLE) {
-        searchContainer.visibility = View.GONE
-        etSearch.setText("")
-        hideKeyboard()
-      } else {
-        searchContainer.visibility = View.VISIBLE
-        etSearch.requestFocus()
-      }
+      searchContainer.visibility = View.VISIBLE
+      etSearch.requestFocus()
+      etSearch.setSelection(etSearch.text?.length ?: 0)
+      val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+      imm.showSoftInput(etSearch, InputMethodManager.SHOW_IMPLICIT)
     }
+
+    btnPickDateFilter.setOnClickListener { showDateFilterPicker() }
 
     btnClearSearch.setOnClickListener {
       etSearch.setText("")
-      searchContainer.visibility = View.GONE
       hideKeyboard()
     }
 
@@ -214,15 +252,48 @@ class MainActivity : ComponentActivity() {
         override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
 
         override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-          viewModel.setSearchQuery(s?.toString().orEmpty())
+          val text = s?.toString().orEmpty()
+          btnClearSearch.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
+          viewModel.setSearchQuery(text)
         }
 
         override fun afterTextChanged(s: Editable?) {}
       }
     )
 
-    btnRefresh.setOnClickListener { viewModel.loadAllSections() }
+    btnRefresh.setOnClickListener {
+      viewModel.loadAllSections()
+      if (viewModel.uiState.value.cloudSyncState.isSignedIn) {
+        viewModel.syncCloudOnly()
+      }
+    }
     btnGrantPermissions.setOnClickListener { permissionLauncher.launch(requiredPermissions) }
+
+    btnEnterSelectAll.setOnClickListener {
+      val visibleIds = activeVisibleIds()
+      if (visibleIds.isEmpty()) {
+        Toast.makeText(this, "لا توجد تسجيلات لتحديدها.", Toast.LENGTH_SHORT).show()
+      } else {
+        viewModel.selectAllInActiveSection(visibleIds)
+      }
+    }
+
+    btnDeleteShort.setOnClickListener { showDeleteShortRecordingsDialog() }
+
+    btnSelectAllToggle.setOnClickListener {
+      val visibleIds = activeVisibleIds()
+      val selectedIds = activeSelectedIds(viewModel.uiState.value)
+      val allSelected = visibleIds.isNotEmpty() && visibleIds.all { selectedIds.contains(it) }
+      if (allSelected) {
+        viewModel.deselectAllInActiveSection()
+      } else {
+        viewModel.selectAllInActiveSection(visibleIds)
+      }
+    }
+
+    btnExitSelection.setOnClickListener { viewModel.exitSelectionMode() }
+    btnShareSelected.setOnClickListener { shareSelectedItems() }
+    btnDeleteSelected.setOnClickListener { confirmDeleteSelectedItems() }
 
     filterAll.setOnClickListener { viewModel.setFilter(CallDirection.ALL) }
     filterIncoming.setOnClickListener { viewModel.setFilter(CallDirection.INCOMING) }
@@ -256,6 +327,55 @@ class MainActivity : ComponentActivity() {
     )
   }
 
+  private fun setupBackHandler() {
+    onBackPressedDispatcher.addCallback(
+      this,
+      object : OnBackPressedCallback(true) {
+        override fun handleOnBackPressed() {
+          if (viewModel.uiState.value.isSelectionMode) {
+            viewModel.exitSelectionMode()
+          } else {
+            isEnabled = false
+            onBackPressedDispatcher.onBackPressed()
+          }
+        }
+      },
+    )
+  }
+
+  private fun showSyncOptionsDialog() {
+    val state = viewModel.uiState.value
+    val cloudState = state.cloudSyncState
+    val options =
+      buildList {
+        add("تحويل ومزامنة جميع التسجيلات المعلّقة")
+        if (cloudState.isSignedIn) {
+          add("مزامنة فورية مع حساب ${cloudState.userEmail ?: "Google"}")
+          add("فصل المزامنة السحابية (إبقاء الحفظ محلياً)")
+        } else {
+          add("ربط حساب Google للمزامنة السحابية (اختياري)")
+        }
+      }.toTypedArray()
+
+    AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+      .setTitle("المزامنة والتفريغ النصي")
+      .setItems(options) { _, which ->
+        when (which) {
+          0 -> viewModel.transcribeAllPendingAndSync()
+          1 -> {
+            if (cloudState.isSignedIn) {
+              viewModel.syncCloudOnly()
+            } else {
+              viewModel.connectGoogleForCloudSync(this)
+            }
+          }
+          2 -> viewModel.disconnectCloudSync()
+        }
+      }
+      .setNegativeButton("إغلاق", null)
+      .show()
+  }
+
   private fun requestCorePermissionsIfNeeded() {
     if (!hasAutoRequestedPermissions && !viewModel.uiState.value.permissions.allCoreGranted) {
       hasAutoRequestedPermissions = true
@@ -279,7 +399,12 @@ class MainActivity : ComponentActivity() {
     updatePillStyle(tabVoiceNotes, !isCallsTab)
 
     etSearch.hint =
-      if (isCallsTab) "ابحث باسم المتصل أو الرقم..." else "ابحث باسم التسجيل الصوتي..."
+      if (isCallsTab) {
+        "ابحث باسم المتصل أو التاريخ (مثال: 26/11)..."
+      } else {
+        "ابحث باسم التسجيل أو التاريخ (مثال: 26/11)..."
+      }
+    btnClearSearch.visibility = if (state.searchQuery.isEmpty()) View.GONE else View.VISIBLE
 
     if (isCallsTab) {
       filterBar.visibility = View.VISIBLE
@@ -290,6 +415,8 @@ class MainActivity : ComponentActivity() {
       fabNewVoiceNote.visibility = View.VISIBLE
       renderVoiceNotesSection(state)
     }
+
+    renderToolsAndSelectionBar(state)
 
     if (state.playingItemId != null) {
       playerBar.visibility = View.VISIBLE
@@ -322,17 +449,60 @@ class MainActivity : ComponentActivity() {
     }
   }
 
+  private fun renderToolsAndSelectionBar(state: CallVaultUiState) {
+    if (state.isSelectionMode) {
+      toolsBar.visibility = View.GONE
+      selectionActionBar.visibility = View.VISIBLE
+      val visibleIds = activeVisibleIds()
+      val selectedIds = activeSelectedIds(state)
+      val allSelected = visibleIds.isNotEmpty() && visibleIds.all { selectedIds.contains(it) }
+      tvSelectionCount.text = "المحدد: ${selectedIds.size} من ${visibleIds.size}"
+      btnSelectAllToggle.text = if (allSelected) "إلغاء الكل" else "تحديد الكل"
+      btnShareSelected.isEnabled = selectedIds.isNotEmpty()
+      btnDeleteSelected.isEnabled = selectedIds.isNotEmpty()
+    } else {
+      selectionActionBar.visibility = View.GONE
+      toolsBar.visibility = View.VISIBLE
+      val thresholdSec = CallVaultSettings.getShortRecordingThresholdSeconds(this)
+      btnDeleteShort.text = "حذف القصيرة (< $thresholdSec ث)"
+    }
+  }
+
+  private fun activeVisibleIds(): List<String> {
+    return if (viewModel.uiState.value.activeSection == VaultSection.CALLS) {
+      latestFilteredCalls.map { it.id }
+    } else {
+      latestFilteredNotes.map { it.id }
+    }
+  }
+
+  private fun activeSelectedIds(state: CallVaultUiState): Set<String> {
+    return if (state.activeSection == VaultSection.CALLS) {
+      state.selectedCallIds
+    } else {
+      state.selectedNoteIds
+    }
+  }
+
+  private fun syncLabel(state: CallVaultUiState): String {
+    return when {
+      state.isBatchTranscribing || state.cloudSyncState.isSyncing -> "جاري المزامنة..."
+      state.cloudSyncState.isSignedIn -> "متزامن سحابياً ☁"
+      else -> "حفظ محلي"
+    }
+  }
+
   private fun renderCallsSection(state: CallVaultUiState) {
     listVoiceNotes.visibility = View.GONE
 
     if (!state.permissions.allCoreGranted) {
       tvStatusTitle.text = "الصلاحيات مطلوبة لتسجيل المكالمات"
-      tvStatusSubtitle.text = "فعّل الميكروفون وحالة الهاتف وسجل المكالمات"
+      tvStatusSubtitle.text = "فعّل الميكروفون وحالة الهاتف وسجل المكالمات وجهات الاتصال"
       btnGrantPermissions.visibility = View.VISIBLE
     } else if (state.isCallRecording) {
       tvStatusTitle.text = "جاري تسجيل المكالمة الآن..."
       tvStatusSubtitle.text =
-        "${state.activeCallSource ?: "MIC"} • ${formatDuration(state.callRecordingElapsedSeconds * 1000L)}"
+        "${state.activeCallSource ?: "الميكروفون والسماعة"} • ${formatDuration(state.callRecordingElapsedSeconds * 1000L)}"
       btnGrantPermissions.visibility = View.GONE
     } else {
       btnGrantPermissions.visibility = View.GONE
@@ -344,7 +514,8 @@ class MainActivity : ComponentActivity() {
         } else {
           "التسجيل التلقائي للمكالمات متوقف (${state.calls.size})"
         }
-      tvStatusSubtitle.text = "${quality.arabicLabel} • حفظ محلي في CallVault/Calls"
+      tvStatusSubtitle.text =
+        "${quality.arabicLabel} • المحوّل مثبّت • ${syncLabel(state)}"
     }
 
     updatePillStyle(filterAll, state.selectedFilter == CallDirection.ALL)
@@ -356,20 +527,20 @@ class MainActivity : ComponentActivity() {
       state.calls.filter { item ->
         val matchesFilter =
           state.selectedFilter == CallDirection.ALL || item.direction == state.selectedFilter
-        val matchesSearch =
-          query.isEmpty() ||
-            item.callerName.contains(query, ignoreCase = true) ||
-            item.phoneNumber.contains(query, ignoreCase = true) ||
-            item.fileName.contains(query, ignoreCase = true)
+        val transcript = state.savedCalls[item.fileName]?.transcript.orEmpty()
+        val matchesSearch = RecordingSearchMatcher.matchesCall(item, transcript, query)
         matchesFilter && matchesSearch
       }
+    latestFilteredCalls = filteredCalls
 
     callsAdapter.submitList(
       items = filteredCalls,
       playingId = state.playingItemId,
-      expandedId = state.expandedItemId,
       isPlaying = state.isPlaying,
       savedCalls = state.savedCalls,
+      transcribingIds = state.transcribingItemIds,
+      selectionMode = state.isSelectionMode,
+      selectedIds = state.selectedCallIds,
     )
 
     if (filteredCalls.isEmpty()) {
@@ -377,7 +548,7 @@ class MainActivity : ComponentActivity() {
       emptyState.visibility = View.VISIBLE
       if (query.isNotEmpty() || state.selectedFilter != CallDirection.ALL) {
         tvEmptyTitle.text = "لا توجد مكالمات مطابقة"
-        tvEmptySubtitle.text = "جرّب تغيير الفلتر أو البحث بكلمة أخرى."
+        tvEmptySubtitle.text = "جرّب تغيير الفلتر أو البحث باسم متصل أو تاريخ آخر."
       } else {
         tvEmptyTitle.text = "لا توجد مكالمات مسجلة بعد"
         tvEmptySubtitle.text =
@@ -393,26 +564,28 @@ class MainActivity : ComponentActivity() {
     listRecordings.visibility = View.GONE
     btnGrantPermissions.visibility = View.GONE
 
-    val transcriptionEnabled = CallVaultSettings.isVoiceTranscriptionEnabled(this)
-    val transcriptionLabel = if (transcriptionEnabled) "التفريغ النصي مفعّل" else "التفريغ النصي متوقف"
+    val autoEnabled = CallVaultSettings.isVoiceTranscriptionEnabled(this)
+    val modeLabel = if (autoEnabled) "التفريغ التلقائي مفعّل" else "التفريغ اليدوي مثبّت"
 
     tvStatusTitle.text = "التسجيلات الصوتية اليدوية (${state.voiceNotes.size})"
-    tvStatusSubtitle.text = "حفظ محلي في CallVault/VoiceNotes • $transcriptionLabel"
+    tvStatusSubtitle.text = "CallVault/VoiceNotes • $modeLabel • ${syncLabel(state)}"
 
     val query = state.searchQuery.trim()
     val filteredNotes =
       state.voiceNotes.filter { note ->
-        query.isEmpty() ||
-          note.title.contains(query, ignoreCase = true) ||
-          note.fileName.contains(query, ignoreCase = true)
+        val transcript = state.savedVoiceNotes[note.fileName]?.transcript.orEmpty()
+        RecordingSearchMatcher.matchesVoiceNote(note, transcript, query)
       }
+    latestFilteredNotes = filteredNotes
 
     voiceNotesAdapter.submitList(
       items = filteredNotes,
       playingId = state.playingItemId,
-      expandedId = state.expandedItemId,
       isPlaying = state.isPlaying,
       savedNotes = state.savedVoiceNotes,
+      transcribingIds = state.transcribingItemIds,
+      selectionMode = state.isSelectionMode,
+      selectedIds = state.selectedNoteIds,
     )
 
     if (filteredNotes.isEmpty()) {
@@ -420,7 +593,7 @@ class MainActivity : ComponentActivity() {
       emptyState.visibility = View.VISIBLE
       if (query.isNotEmpty()) {
         tvEmptyTitle.text = "لا توجد تسجيلات صوتية مطابقة"
-        tvEmptySubtitle.text = "جرّب البحث باسم آخر."
+        tvEmptySubtitle.text = "جرّب البحث باسم أو تاريخ آخر."
       } else {
         tvEmptyTitle.text = "لا توجد تسجيلات صوتية بعد"
         tvEmptySubtitle.text = "اضغط على زر + الأحمر بالأسفل لبدء تسجيل صوتي جديد من الميكروفون."
@@ -429,6 +602,22 @@ class MainActivity : ComponentActivity() {
       listVoiceNotes.visibility = View.VISIBLE
       emptyState.visibility = View.GONE
     }
+  }
+
+  private fun showDateFilterPicker() {
+    val calendar = Calendar.getInstance()
+    DatePickerDialog(
+      this,
+      android.R.style.Theme_DeviceDefault_Dialog_Alert,
+      { _, year, month, dayOfMonth ->
+        val formattedDate = String.format(Locale.US, "%02d/%02d/%04d", dayOfMonth, month + 1, year)
+        etSearch.setText(formattedDate)
+        etSearch.setSelection(formattedDate.length)
+      },
+      calendar.get(Calendar.YEAR),
+      calendar.get(Calendar.MONTH),
+      calendar.get(Calendar.DAY_OF_MONTH),
+    ).show()
   }
 
   private fun updatePillStyle(pill: TextView, selected: Boolean) {
@@ -461,36 +650,39 @@ class MainActivity : ComponentActivity() {
 
   private fun showCallTranscriptionDialog(item: CallRecordingItem) {
     val existing = viewModel.uiState.value.savedCalls[item.fileName]
+    val cachedNotice =
+      if (existing?.syncedToCloud == true) {
+        "محفوظ محلياً ومتزامن مع السحابة ☁"
+      } else {
+        "تم التحميل من السجل المحلي للمكالمات"
+      }
     openTranscriptionDialog(
       title = "تفريغ المكالمة",
       subtitle = "${item.callerName} • ${item.phoneNumber}",
       cachedTranscript = existing?.transcript,
       cachedSummary = existing?.summaryPoints.orEmpty(),
       cachedTasks = existing?.actionItems.orEmpty(),
-      cachedNotice = "تم التحميل من السجل المحلي للمكالمات",
-      runTranscription = { helper ->
-        helper.transcribeAndSaveCall(this@MainActivity, item, viewModel.repository)
-      },
+      cachedNotice = cachedNotice,
+      runTranscription = { viewModel.transcribeCallSuspend(item) },
     )
   }
 
   private fun showVoiceNoteTranscriptionDialog(note: VoiceNoteItem) {
-    if (!CallVaultSettings.isVoiceTranscriptionEnabled(this)) {
-      Toast.makeText(this, "تم إيقاف تحويل التسجيلات الصوتية لنص من الإعدادات.", Toast.LENGTH_SHORT)
-        .show()
-      return
-    }
     val existing = viewModel.uiState.value.savedVoiceNotes[note.fileName]
+    val cachedNotice =
+      if (existing?.syncedToCloud == true) {
+        "محفوظ محلياً ومتزامن مع السحابة ☁"
+      } else {
+        "تم التحميل من السجل المحلي للتسجيلات الصوتية"
+      }
     openTranscriptionDialog(
       title = "تفريغ التسجيل الصوتي",
       subtitle = note.title,
       cachedTranscript = existing?.transcript,
       cachedSummary = existing?.summaryPoints.orEmpty(),
       cachedTasks = existing?.actionItems.orEmpty(),
-      cachedNotice = "تم التحميل من السجل المحلي للتسجيلات الصوتية",
-      runTranscription = { helper ->
-        helper.transcribeAndSaveVoiceNote(this@MainActivity, note, viewModel.repository)
-      },
+      cachedNotice = cachedNotice,
+      runTranscription = { viewModel.transcribeVoiceNoteSuspend(note) },
     )
   }
 
@@ -501,7 +693,7 @@ class MainActivity : ComponentActivity() {
     cachedSummary: List<String>,
     cachedTasks: List<String>,
     cachedNotice: String,
-    runTranscription: suspend (TranscriptionHelper) -> Result<TranscriptionResult>,
+    runTranscription: suspend () -> Result<TranscriptionResult>,
   ) {
     val dialog = Dialog(this)
     dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
@@ -584,9 +776,8 @@ class MainActivity : ComponentActivity() {
       dialogActions.visibility = View.GONE
       tvAiNotice.visibility = View.GONE
 
-      val helper = TranscriptionHelper(repository = viewModel.repository)
       lifecycleScope.launch {
-        val result = runTranscription(helper)
+        val result = runTranscription()
         if (!dialog.isShowing) return@launch
 
         result
@@ -623,19 +814,231 @@ class MainActivity : ComponentActivity() {
     }
   }
 
+  private fun showDeleteShortRecordingsDialog() {
+    val state = viewModel.uiState.value
+    val activeSection = state.activeSection
+    val savedThreshold = CallVaultSettings.getShortRecordingThresholdSeconds(this)
+
+    val container =
+      LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        layoutDirection = View.LAYOUT_DIRECTION_RTL
+        setPadding(48, 32, 48, 16)
+      }
+
+    val tvHint =
+      TextView(this).apply {
+        text = "حدد الحد الأقصى بالثواني لحذف جميع التسجيلات الأقصر منه في القسم الحالي:"
+        setTextColor(Color.parseColor("#CBD5E1"))
+        textSize = 14f
+      }
+    container.addView(tvHint)
+
+    val etSeconds =
+      EditText(this).apply {
+        inputType = InputType.TYPE_CLASS_NUMBER
+        setText(savedThreshold.toString())
+        setSelection(text.length)
+        setTextColor(Color.WHITE)
+        setHintTextColor(Color.parseColor("#64748B"))
+        hint = "المدة بالثواني (مثال: 10)"
+        textSize = 16f
+        setPadding(24, 24, 24, 24)
+        setBackgroundResource(R.drawable.bg_search_field)
+        val lp =
+          LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+          )
+        lp.topMargin = 24
+        layoutParams = lp
+      }
+    container.addView(etSeconds)
+
+    val presetsRow =
+      LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        val lp =
+          LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+          )
+        lp.topMargin = 20
+        layoutParams = lp
+      }
+    listOf(5, 10, 15, 30, 60).forEachIndexed { idx, preset ->
+      val chip =
+        Button(this).apply {
+          text = "$preset ث"
+          isAllCaps = false
+          textSize = 12f
+          setTextColor(Color.WHITE)
+          setBackgroundResource(R.drawable.bg_pill_unselected)
+          minHeight = 48
+          val lp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+          if (idx > 0) lp.marginStart = 8
+          layoutParams = lp
+          setOnClickListener {
+            etSeconds.setText(preset.toString())
+            etSeconds.setSelection(etSeconds.text.length)
+          }
+        }
+      presetsRow.addView(chip)
+    }
+    container.addView(presetsRow)
+
+    val tvMatchCount =
+      TextView(this).apply {
+        setTextColor(Color.parseColor("#38BDF8"))
+        textSize = 13f
+        val lp =
+          LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+          )
+        lp.topMargin = 20
+        layoutParams = lp
+      }
+    container.addView(tvMatchCount)
+
+    fun updatePreviewCount(raw: String) {
+      val sec = raw.toIntOrNull()?.coerceIn(1, 3600)
+      if (sec == null) {
+        tvMatchCount.text = "أدخل عدداً صحيحاً من الثواني (1 - 3600)"
+        return
+      }
+      val thresholdMs = sec * 1000L
+      val count =
+        if (activeSection == VaultSection.CALLS) {
+          state.calls.count { it.durationMs < thresholdMs }
+        } else {
+          state.voiceNotes.count { it.durationMs < thresholdMs }
+        }
+      val sectionName = if (activeSection == VaultSection.CALLS) "مكالمة" else "تسجيل صوتي"
+      tvMatchCount.text = "التسجيلات المطابقة للحذف (< $sec ثانية): $count $sectionName"
+    }
+
+    updatePreviewCount(savedThreshold.toString())
+    etSeconds.addTextChangedListener(
+      object : TextWatcher {
+        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+          updatePreviewCount(s?.toString().orEmpty())
+        }
+        override fun afterTextChanged(s: Editable?) {}
+      }
+    )
+
+    AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+      .setTitle("حذف التسجيلات القصيرة")
+      .setView(container)
+      .setPositiveButton("حذف الآن") { _, _ ->
+        val entered = etSeconds.text?.toString()?.trim()?.toIntOrNull()
+        if (entered == null || entered <= 0) {
+          Toast.makeText(this, "يرجى إدخال مدة صحيحة بالثواني.", Toast.LENGTH_SHORT).show()
+        } else {
+          val clamped = entered.coerceIn(1, 3600)
+          CallVaultSettings.setShortRecordingThresholdSeconds(this, clamped)
+          btnDeleteShort.text = "حذف القصيرة (< $clamped ث)"
+          viewModel.deleteShortRecordings(clamped, activeSection)
+        }
+      }
+      .setNegativeButton("إلغاء", null)
+      .show()
+  }
+
+  private fun shareSelectedItems() {
+    val state = viewModel.uiState.value
+    val shareUris = ArrayList<Uri>()
+    if (state.activeSection == VaultSection.CALLS) {
+      val selected = state.calls.filter { state.selectedCallIds.contains(it.id) }
+      for (item in selected) {
+        resolveShareableUri(item.uri, item.legacyFilePath)?.let { shareUris.add(it) }
+      }
+    } else {
+      val selected = state.voiceNotes.filter { state.selectedNoteIds.contains(it.id) }
+      for (note in selected) {
+        resolveShareableUri(note.uri, note.legacyFilePath)?.let { shareUris.add(it) }
+      }
+    }
+
+    if (shareUris.isEmpty()) {
+      Toast.makeText(this, "حدد تسجيلاً واحداً على الأقل للإرسال.", Toast.LENGTH_SHORT).show()
+      return
+    }
+
+    val shareIntent =
+      if (shareUris.size == 1) {
+        Intent(Intent.ACTION_SEND).apply {
+          type = "audio/*"
+          putExtra(Intent.EXTRA_STREAM, shareUris[0])
+          addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+      } else {
+        Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+          type = "audio/*"
+          putParcelableArrayListExtra(Intent.EXTRA_STREAM, shareUris)
+          addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+      }
+    startActivity(Intent.createChooser(shareIntent, "إرسال التسجيلات (${shareUris.size})"))
+  }
+
+  private fun confirmDeleteSelectedItems() {
+    val state = viewModel.uiState.value
+    if (state.activeSection == VaultSection.CALLS) {
+      val selected = state.calls.filter { state.selectedCallIds.contains(it.id) }
+      if (selected.isEmpty()) {
+        Toast.makeText(this, "حدد مكالمة واحدة على الأقل للحذف.", Toast.LENGTH_SHORT).show()
+        return
+      }
+      AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+        .setTitle("حذف المكالمات المحددة")
+        .setMessage("هل تريد حذف ${selected.size} مكالمة محددة نهائياً؟")
+        .setPositiveButton("حذف الكل") { _, _ -> viewModel.deleteCalls(selected) }
+        .setNegativeButton("إلغاء", null)
+        .show()
+    } else {
+      val selected = state.voiceNotes.filter { state.selectedNoteIds.contains(it.id) }
+      if (selected.isEmpty()) {
+        Toast.makeText(this, "حدد تسجيلاً صوتياً واحداً على الأقل للحذف.", Toast.LENGTH_SHORT).show()
+        return
+      }
+      AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+        .setTitle("حذف التسجيلات المحددة")
+        .setMessage("هل تريد حذف ${selected.size} تسجيل صوتي محدد نهائياً؟")
+        .setPositiveButton("حذف الكل") { _, _ -> viewModel.deleteVoiceNotes(selected) }
+        .setNegativeButton("إلغاء", null)
+        .show()
+    }
+  }
+
+  private fun resolveShareableUri(uri: Uri, legacyFilePath: String?): Uri? {
+    if (uri.scheme == "content") return uri
+    val path = legacyFilePath ?: uri.path ?: return null
+    val file = File(path)
+    if (!file.exists()) return null
+    return try {
+      FileProvider.getUriForFile(this, "${BuildConfig.APPLICATION_ID}.fileprovider", file)
+    } catch (_: Exception) {
+      null
+    }
+  }
+
   private fun shareAudio(uri: Uri, legacyFilePath: String?, fileName: String) {
-    if (uri.scheme == "content") {
+    val shareUri = resolveShareableUri(uri, legacyFilePath)
+    if (shareUri != null) {
       val shareIntent =
         Intent(Intent.ACTION_SEND).apply {
-          type = "audio/mpeg"
-          putExtra(Intent.EXTRA_STREAM, uri)
+          type = "audio/*"
+          putExtra(Intent.EXTRA_STREAM, shareUri)
           addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
       startActivity(Intent.createChooser(shareIntent, "مشاركة التسجيل"))
     } else {
       Toast.makeText(
         this,
-        "مسار الملف: ${legacyFilePath ?: fileName}",
+        "تعذر العثور على الملف للمشاركة: $fileName",
         Toast.LENGTH_SHORT,
       ).show()
     }

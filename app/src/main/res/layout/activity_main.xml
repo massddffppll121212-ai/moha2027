@@ -79,6 +79,19 @@
             </LinearLayout>
 
             <ImageButton
+                android:id="@+id/btn_sync"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_marginEnd="2dp"
+                android:background="@drawable/bg_circle_surface"
+                android:contentDescription="مزامنة وتفريغ"
+                android:minWidth="48dp"
+                android:minHeight="48dp"
+                android:padding="12dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_cloud_sync" />
+
+            <ImageButton
                 android:id="@+id/btn_search"
                 android:layout_width="48dp"
                 android:layout_height="48dp"
@@ -147,7 +160,7 @@
                 android:textStyle="bold" />
         </LinearLayout>
 
-        <!-- حقل البحث (يظهر عند الضغط على زر البحث) -->
+        <!-- شريط البحث الدائم بالاسم أو الرقم أو التاريخ -->
         <LinearLayout
             android:id="@+id/search_container"
             android:layout_width="match_parent"
@@ -157,8 +170,9 @@
             android:background="@drawable/bg_search_field"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingHorizontal="12dp"
-            android:visibility="gone">
+            android:paddingStart="12dp"
+            android:paddingEnd="4dp"
+            android:visibility="visible">
 
             <ImageView
                 android:layout_width="20dp"
@@ -173,7 +187,7 @@
                 android:layout_marginStart="8dp"
                 android:layout_weight="1"
                 android:background="@android:color/transparent"
-                android:hint="ابحث..."
+                android:hint="ابحث باسم المتصل أو التاريخ (مثال: 26/11)..."
                 android:imeOptions="actionSearch"
                 android:inputType="text"
                 android:maxLines="1"
@@ -183,6 +197,18 @@
                 android:textSize="14sp" />
 
             <ImageButton
+                android:id="@+id/btn_pick_date_filter"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:background="@android:color/transparent"
+                android:contentDescription="تصفية حسب التاريخ"
+                android:minWidth="48dp"
+                android:minHeight="48dp"
+                android:padding="13dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_calendar" />
+
+            <ImageButton
                 android:id="@+id/btn_clear_search"
                 android:layout_width="48dp"
                 android:layout_height="48dp"
@@ -190,7 +216,10 @@
                 android:contentDescription="مسح البحث"
                 android:minWidth="48dp"
                 android:minHeight="48dp"
-                android:src="@drawable/ic_close" />
+                android:padding="13dp"
+                android:scaleType="centerInside"
+                android:src="@drawable/ic_close"
+                android:visibility="gone" />
         </LinearLayout>
 
         <!-- بطاقة حالة القسم النشط / الصلاحيات / الرفع السحابي -->
@@ -244,6 +273,135 @@
                 android:textSize="13sp"
                 android:textStyle="bold"
                 android:visibility="gone" />
+        </LinearLayout>
+
+        <!-- شريط الأدوات السريعة: تحديد الكل + حذف التسجيلات القصيرة -->
+        <LinearLayout
+            android:id="@+id/tools_bar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginHorizontal="16dp"
+            android:layout_marginBottom="10dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btn_enter_select_all"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_marginEnd="8dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_pill_unselected"
+                android:minHeight="48dp"
+                android:paddingHorizontal="12dp"
+                android:text="تحديد الكل"
+                android:textAllCaps="false"
+                android:textColor="#F8FAFC"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/btn_delete_short"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1.3"
+                android:background="@drawable/bg_pill_unselected"
+                android:minHeight="48dp"
+                android:paddingHorizontal="12dp"
+                android:text="حذف القصيرة (&lt; 10 ث)"
+                android:textAllCaps="false"
+                android:textColor="#FCA5A5"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- شريط إجراءات التحديد المتعدد: تحديد/إلغاء الكل + إرسال المحدد + حذف المحدد -->
+        <LinearLayout
+            android:id="@+id/selection_action_bar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginHorizontal="16dp"
+            android:layout_marginBottom="10dp"
+            android:background="@drawable/bg_card_dark"
+            android:orientation="vertical"
+            android:padding="12dp"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/tv_selection_count"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="المحدد: 0"
+                    android:textColor="#38BDF8"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/btn_select_all_toggle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
+                    android:layout_marginEnd="6dp"
+                    android:background="@drawable/bg_pill_unselected"
+                    android:minHeight="48dp"
+                    android:paddingHorizontal="14dp"
+                    android:text="تحديد الكل"
+                    android:textAllCaps="false"
+                    android:textColor="#FFFFFF"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <ImageButton
+                    android:id="@+id/btn_exit_selection"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:background="@drawable/bg_circle_surface"
+                    android:contentDescription="إلغاء التحديد"
+                    android:minWidth="48dp"
+                    android:minHeight="48dp"
+                    android:padding="13dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/ic_close" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btn_share_selected"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_marginEnd="8dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_pill_selected"
+                    android:minHeight="48dp"
+                    android:text="إرسال المحدد"
+                    android:textAllCaps="false"
+                    android:textColor="#FFFFFF"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/btn_delete_selected"
+                    android:layout_width="0dp"
+                    android:layout_height="48dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_pill_unselected"
+                    android:minHeight="48dp"
+                    android:text="حذف المحدد"
+                    android:textAllCaps="false"
+                    android:textColor="#FCA5A5"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
         </LinearLayout>
 
         <!-- شريط الفلتر الخاص بقسم المكالمات فقط: الكل / واردة / صادرة -->

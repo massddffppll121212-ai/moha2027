@@ -13,6 +13,18 @@
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
+        <CheckBox
+            android:id="@+id/cb_note_select"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginEnd="4dp"
+            android:buttonTint="#38BDF8"
+            android:contentDescription="تحديد التسجيل الصوتي"
+            android:gravity="center"
+            android:minWidth="48dp"
+            android:minHeight="48dp"
+            android:visibility="gone" />
+
         <ImageView
             android:id="@+id/iv_voice_icon"
             android:layout_width="44dp"
@@ -128,14 +140,30 @@
             android:src="@drawable/ic_delete_outline" />
     </LinearLayout>
 
+    <!-- معاينة النص المفرّغ + زر التحويل المثبت دائماً في التسجيلات الصوتية -->
+    <TextView
+        android:id="@+id/tv_note_transcript_preview"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:background="@drawable/bg_pill_unselected"
+        android:ellipsize="end"
+        android:maxLines="2"
+        android:paddingHorizontal="12dp"
+        android:paddingVertical="8dp"
+        android:textColor="#CBD5E1"
+        android:textDirection="anyRtl"
+        android:textSize="12sp"
+        android:visibility="gone" />
+
     <LinearLayout
         android:id="@+id/note_expanded_actions"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
+        android:layout_marginTop="10dp"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:visibility="gone">
+        android:visibility="visible">
 
         <Button
             android:id="@+id/btn_note_transcribe"

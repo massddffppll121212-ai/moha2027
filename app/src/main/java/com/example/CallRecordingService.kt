@@ -11,13 +11,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.media.MediaMetadataRetriever
 import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.IBinder
-import android.provider.CallLog
 import android.provider.MediaStore
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -29,6 +30,7 @@ import java.util.Locale
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 class CallRecordingService : Service() {
 
@@ -39,6 +41,11 @@ class CallRecordingService : Service() {
   private var activePhoneNumber: String? = null
   private var recordingStartedAtMs: Long = 0L
   private var isStopping = false
+
+  private var audioRoutingModified = false
+  private var wasSpeakerphoneOn = false
+  private var previousVoiceVolume: Int? = null
+  private var previousCommunicationDevice: AudioDeviceInfo? = null
 
   override fun onCreate() {
     super.onCreate()
@@ -64,6 +71,12 @@ class CallRecordingService : Service() {
   }
 
   private fun startRecording(direction: String, phoneNumber: String?) {
+    if (CallVaultSettings.isNumberExcluded(this, phoneNumber)) {
+      Log.i(TAG, "Skipping recording for excluded number")
+      stopSelf()
+      return
+    }
+
     val hasMicPermission =
       ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
         PackageManager.PERMISSION_GRANTED
@@ -111,8 +124,10 @@ class CallRecordingService : Service() {
     val audioSources =
       listOf(
         MediaRecorder.AudioSource.VOICE_CALL to "VOICE_CALL",
-        MediaRecorder.AudioSource.VOICE_COMMUNICATION to "VOICE_COMMUNICATION",
+        MediaRecorder.AudioSource.VOICE_RECOGNITION to "VOICE_RECOGNITION",
+        MediaRecorder.AudioSource.CAMCORDER to "CAMCORDER",
         MediaRecorder.AudioSource.MIC to "MIC",
+        MediaRecorder.AudioSource.VOICE_COMMUNICATION to "VOICE_COMMUNICATION",
       )
 
     val recordingQuality = CallVaultSettings.getCallRecordingQuality(this)
@@ -161,17 +176,25 @@ class CallRecordingService : Service() {
       return
     }
 
+    val dualCaptureEnabled = configureDualCaptureAudioRouting(selectedSourceName)
+    val displaySource =
+      if (dualCaptureEnabled) {
+        "الميكروفون والسماعة"
+      } else {
+        selectedSourceName
+      }
+
     mediaRecorder = startedRecorder
     recordingStartedAtMs = System.currentTimeMillis()
     _lastErrorFlow.value = null
-    _activeSourceFlow.value = selectedSourceName
+    _activeSourceFlow.value = displaySource
     _recordingStartTimeFlow.value = recordingStartedAtMs
     _isRecordingFlow.value = true
 
     val activeNotification =
       buildNotification(
         title = "DonkeyEar · تسجيل مكالمة ${if (normalizedDirection == "Incoming") "واردة" else "صادرة"}",
-        text = "المصدر: $selectedSourceName · ${recordingQuality.arabicLabel}",
+        text = "المصدر: $displaySource · ${recordingQuality.arabicLabel}",
         includeStopAction = true,
       )
     val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -200,9 +223,12 @@ class CallRecordingService : Service() {
       }
     }
 
+    restoreAudioRouting()
+
     val tempFile = tempOutputFile
-    val fileName = targetFileName
+    val initialFileName = targetFileName
     val directionCopy = activeDirection
+    val phoneNumberCopy = activePhoneNumber
     val startedAt = recordingStartedAtMs
     tempOutputFile = null
     targetFileName = null
@@ -210,10 +236,68 @@ class CallRecordingService : Service() {
     recordingStartedAtMs = 0L
 
     val hasValidAudio =
-      recordedSuccessfully && tempFile != null && tempFile.exists() && tempFile.length() > 0L && fileName != null
+      recordedSuccessfully && tempFile != null && tempFile.exists() && tempFile.length() > 0L && initialFileName != null
 
     if (hasValidAudio) {
-      saveToCallsFolder(sourceFile = tempFile, fileName = fileName)
+      val recentLog =
+        if (phoneNumberCopy.isNullOrBlank()) {
+          CallMetadataStore.findRecentCallLogNear(applicationContext, startedAt)
+        } else {
+          null
+        }
+      val resolvedNumber = phoneNumberCopy?.takeIf { it.isNotBlank() } ?: recentLog?.number
+
+      if (CallVaultSettings.isNumberExcluded(applicationContext, resolvedNumber)) {
+        Log.i(TAG, "Discarding recording because resolved number is in excluded list")
+        if (tempFile.exists()) {
+          tempFile.delete()
+        }
+      } else {
+        val finalFileName =
+          if (phoneNumberCopy.isNullOrBlank() && !resolvedNumber.isNullOrBlank()) {
+            buildFileName(direction = directionCopy, phoneNumber = resolvedNumber)
+          } else {
+            initialFileName
+          }
+        val resolvedCallerName =
+          CallMetadataStore.resolveCallerName(applicationContext, resolvedNumber)
+            ?: recentLog?.callerName?.takeIf { it.isNotBlank() }
+            ?: if (directionCopy.equals("Incoming", ignoreCase = true)) "متصل وارد" else "اتصال صادر"
+        val displayPhone = resolvedNumber?.takeIf { it.isNotBlank() } ?: "رقم غير معروف"
+
+        val durationMs = extractDurationMs(tempFile)
+        val savedUri = saveToCallsFolder(sourceFile = tempFile, fileName = finalFileName)
+        CallMetadataStore.saveMetadata(
+          context = applicationContext,
+          fileName = finalFileName,
+          callerName = resolvedCallerName,
+          phoneNumber = displayPhone,
+          direction = directionCopy,
+        )
+
+        if (CallVaultSettings.isCallAutoTranscriptionEnabled(applicationContext)) {
+          val callDirection = CallDirection.safeFromName(directionCopy)
+          val item =
+            CallRecordingItem(
+              id = "auto_call_$finalFileName",
+              uri = savedUri,
+              fileName = finalFileName,
+              callerName = resolvedCallerName,
+              phoneNumber = displayPhone,
+              direction = callDirection,
+              timestampMs = if (startedAt > 0L) startedAt else System.currentTimeMillis(),
+              durationMs = durationMs,
+              sizeBytes = tempFile.length(),
+              legacyFilePath = if (savedUri.scheme == "file") savedUri.path else null,
+            )
+          val appCtx = applicationContext
+          kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+            .launch {
+              TranscriptionHelper(repository = LocalCallVaultRepository.getInstance(appCtx))
+                .transcribeAndSaveCall(appCtx, item)
+            }
+        }
+      }
     }
 
     if (tempFile != null && tempFile.exists()) {
@@ -228,6 +312,99 @@ class CallRecordingService : Service() {
 
     stopForegroundCompat()
     stopSelf()
+  }
+
+  private fun configureDualCaptureAudioRouting(selectedSourceName: String): Boolean {
+    if (selectedSourceName == "VOICE_CALL") {
+      return true
+    }
+    if (!CallVaultSettings.isCallSpeakerRecordingEnabled(this)) {
+      return false
+    }
+    return try {
+      val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
+      am.isMicrophoneMute = false
+
+      val hasExternalHeadset =
+        am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { device ->
+          device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+            device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+            device.type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
+            device.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+            device.type == AudioDeviceInfo.TYPE_USB_HEADSET ||
+            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+              device.type == AudioDeviceInfo.TYPE_BLE_HEADSET)
+        }
+      if (hasExternalHeadset) {
+        return false
+      }
+
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        previousCommunicationDevice = am.communicationDevice
+        val speakerDevice =
+          am.availableCommunicationDevices.firstOrNull {
+            it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+          }
+        if (speakerDevice != null) {
+          am.setCommunicationDevice(speakerDevice)
+        } else {
+          @Suppress("DEPRECATION")
+          wasSpeakerphoneOn = am.isSpeakerphoneOn
+          @Suppress("DEPRECATION")
+          am.isSpeakerphoneOn = true
+        }
+      } else {
+        @Suppress("DEPRECATION")
+        wasSpeakerphoneOn = am.isSpeakerphoneOn
+        @Suppress("DEPRECATION")
+        am.isSpeakerphoneOn = true
+      }
+
+      val maxVol = am.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL)
+      val currentVol = am.getStreamVolume(AudioManager.STREAM_VOICE_CALL)
+      val targetVol = ((maxVol * 0.80f).toInt()).coerceIn(1, maxVol.coerceAtLeast(1))
+      if (maxVol > 0 && currentVol < targetVol) {
+        previousVoiceVolume = currentVol
+        am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, targetVol, 0)
+      }
+
+      audioRoutingModified = true
+      true
+    } catch (e: Exception) {
+      Log.w(TAG, "Could not configure speaker audio routing: ${e.message}")
+      false
+    }
+  }
+
+  private fun restoreAudioRouting() {
+    if (!audioRoutingModified) return
+    try {
+      val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+      if (am != null) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+          val prev = previousCommunicationDevice
+          if (prev != null) {
+            am.setCommunicationDevice(prev)
+          } else {
+            am.clearCommunicationDevice()
+          }
+        } else {
+          @Suppress("DEPRECATION")
+          am.isSpeakerphoneOn = wasSpeakerphoneOn
+        }
+        val prevVol = previousVoiceVolume
+        if (prevVol != null) {
+          am.setStreamVolume(AudioManager.STREAM_VOICE_CALL, prevVol, 0)
+        }
+      }
+    } catch (e: Exception) {
+      Log.w(TAG, "Error restoring audio routing: ${e.message}")
+    } finally {
+      audioRoutingModified = false
+      wasSpeakerphoneOn = false
+      previousVoiceVolume = null
+      previousCommunicationDevice = null
+    }
   }
 
   private fun saveToCallsFolder(sourceFile: File, fileName: String): Uri {
@@ -288,27 +465,7 @@ class CallRecordingService : Service() {
     }
   }
 
-  private fun lookupCallerName(number: String): String? {
-    val hasCallLog =
-      ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CALL_LOG) ==
-        PackageManager.PERMISSION_GRANTED
-    if (!hasCallLog) return null
-    return try {
-      contentResolver
-        .query(
-          CallLog.Calls.CONTENT_URI,
-          arrayOf(CallLog.Calls.CACHED_NAME),
-          "${CallLog.Calls.NUMBER} LIKE ?",
-          arrayOf("%${number.takeLast(8)}%"),
-          "${CallLog.Calls.DATE} DESC",
-        )
-        ?.use { cursor ->
-          if (cursor.moveToFirst()) cursor.getString(0)?.takeIf { it.isNotBlank() } else null
-        }
-    } catch (_: Exception) {
-      null
-    }
-  }
+
 
   private fun createMediaRecorder(): MediaRecorder {
     return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -404,6 +561,7 @@ class CallRecordingService : Service() {
   }
 
   override fun onDestroy() {
+    restoreAudioRouting()
     if (_isRecordingFlow.value || mediaRecorder != null) {
       stopRecordingAndFinish()
     }
