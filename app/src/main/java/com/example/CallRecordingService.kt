@@ -121,45 +121,62 @@ class CallRecordingService : Service() {
     targetFileName = fileName
     tempOutputFile = cacheOutput
 
+    val hasCaptureAudioOutput =
+      ContextCompat.checkSelfPermission(this, "android.permission.CAPTURE_AUDIO_OUTPUT") ==
+        PackageManager.PERMISSION_GRANTED
+
     val audioSources =
-      listOf(
-        MediaRecorder.AudioSource.VOICE_CALL to "VOICE_CALL",
-        MediaRecorder.AudioSource.VOICE_RECOGNITION to "VOICE_RECOGNITION",
-        MediaRecorder.AudioSource.CAMCORDER to "CAMCORDER",
-        MediaRecorder.AudioSource.MIC to "MIC",
-        MediaRecorder.AudioSource.VOICE_COMMUNICATION to "VOICE_COMMUNICATION",
-      )
+      buildList {
+        if (hasCaptureAudioOutput) {
+          add(MediaRecorder.AudioSource.VOICE_CALL to "VOICE_CALL")
+        }
+        add(MediaRecorder.AudioSource.VOICE_RECOGNITION to "VOICE_RECOGNITION")
+        add(MediaRecorder.AudioSource.MIC to "MIC")
+        add(MediaRecorder.AudioSource.CAMCORDER to "CAMCORDER")
+        add(MediaRecorder.AudioSource.VOICE_COMMUNICATION to "VOICE_COMMUNICATION")
+      }
 
     val recordingQuality = CallVaultSettings.getCallRecordingQuality(this)
+    val qualityAttempts =
+      listOf(
+        recordingQuality.bitrate to recordingQuality.sampleRate,
+        128_000 to 44_100,
+      ).distinct()
 
     var startedRecorder: MediaRecorder? = null
     var selectedSourceName: String? = null
 
-    for ((sourceId, sourceName) in audioSources) {
-      val candidate = createMediaRecorder()
-      try {
-        if (cacheOutput.exists()) {
-          cacheOutput.delete()
-        }
-        candidate.apply {
-          setAudioSource(sourceId)
-          setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-          setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-          setAudioEncodingBitRate(recordingQuality.bitrate)
-          setAudioSamplingRate(recordingQuality.sampleRate)
-          setOutputFile(cacheOutput.absolutePath)
-          prepare()
-          start()
-        }
-        startedRecorder = candidate
-        selectedSourceName = sourceName
-        Log.i(TAG, "Call recording started using source=$sourceName (${recordingQuality.storageValue}) -> $fileName")
-        break
-      } catch (e: Exception) {
-        Log.w(TAG, "Audio source $sourceName failed: ${e.message}")
+    sourceLoop@ for ((sourceId, sourceName) in audioSources) {
+      for ((bitrate, sampleRate) in qualityAttempts) {
+        val candidate = createMediaRecorder()
         try {
-          candidate.release()
-        } catch (_: Exception) {
+          if (cacheOutput.exists()) {
+            cacheOutput.delete()
+          }
+          candidate.apply {
+            setAudioSource(sourceId)
+            setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            setAudioChannels(1)
+            setAudioEncodingBitRate(bitrate)
+            setAudioSamplingRate(sampleRate)
+            setOutputFile(cacheOutput.absolutePath)
+            prepare()
+            start()
+          }
+          startedRecorder = candidate
+          selectedSourceName = sourceName
+          Log.i(
+            TAG,
+            "Call recording started using source=$sourceName (bitrate=$bitrate, rate=$sampleRate) -> $fileName",
+          )
+          break@sourceLoop
+        } catch (e: Exception) {
+          Log.w(TAG, "Audio source $sourceName ($bitrate/$sampleRate) failed: ${e.message}")
+          try {
+            candidate.release()
+          } catch (_: Exception) {
+          }
         }
       }
     }
@@ -266,7 +283,7 @@ class CallRecordingService : Service() {
         val displayPhone = resolvedNumber?.takeIf { it.isNotBlank() } ?: "رقم غير معروف"
 
         val durationMs = extractDurationMs(tempFile)
-        val savedUri = saveToCallsFolder(sourceFile = tempFile, fileName = finalFileName)
+        val savedUri = saveToCallsFolder(sourceFile = tempFile, fileName = finalFileName, durationMs = durationMs)
         CallMetadataStore.saveMetadata(
           context = applicationContext,
           fileName = finalFileName,
@@ -407,12 +424,15 @@ class CallRecordingService : Service() {
     }
   }
 
-  private fun saveToCallsFolder(sourceFile: File, fileName: String): Uri {
+  private fun saveToCallsFolder(sourceFile: File, fileName: String, durationMs: Long): Uri {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
       val values =
         ContentValues().apply {
           put(MediaStore.Audio.Media.DISPLAY_NAME, fileName)
-          put(MediaStore.Audio.Media.MIME_TYPE, "audio/mpeg")
+          put(MediaStore.Audio.Media.MIME_TYPE, "audio/mp4")
+          if (durationMs > 0L) {
+            put(MediaStore.Audio.Media.DURATION, durationMs)
+          }
           put(
             MediaStore.Audio.Media.RELATIVE_PATH,
             "${Environment.DIRECTORY_MUSIC}/$CALLS_RELATIVE_SUBFOLDER",
@@ -487,9 +507,9 @@ class CallRecordingService : Service() {
         ?.takeIf { it.isNotBlank() }
 
     return if (sanitizedNumber != null) {
-      "Call_${sanitizedDirection}_${sanitizedNumber}_${timestamp}.mp3"
+      "Call_${sanitizedDirection}_${sanitizedNumber}_${timestamp}.m4a"
     } else {
-      "Call_${sanitizedDirection}_${timestamp}.mp3"
+      "Call_${sanitizedDirection}_${timestamp}.m4a"
     }
   }
 

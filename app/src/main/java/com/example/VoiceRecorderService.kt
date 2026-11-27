@@ -11,6 +11,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.media.AudioManager
 import android.media.MediaMetadataRetriever
 import android.media.MediaRecorder
 import android.net.Uri
@@ -130,40 +131,81 @@ class VoiceRecorderService : Service() {
     targetFileName = fileName
     tempOutputFile = cacheOutput
 
-    val recorder = createMediaRecorder()
     try {
-      if (cacheOutput.exists()) {
-        cacheOutput.delete()
-      }
-      recorder.apply {
-        // مسجل صوتي يدوي من المايك فقط - لا علاقة له بالمكالمات
-        setAudioSource(MediaRecorder.AudioSource.MIC)
-        setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-        setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-        setAudioEncodingBitRate(AUDIO_BITRATE)
-        setAudioSamplingRate(AUDIO_SAMPLE_RATE)
-        setOutputFile(cacheOutput.absolutePath)
-        prepare()
-        start()
+      val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+      if (am != null) {
+        am.isMicrophoneMute = false
+        if (am.mode == AudioManager.MODE_IN_COMMUNICATION || am.mode == AudioManager.MODE_RINGTONE) {
+          am.mode = AudioManager.MODE_NORMAL
+        }
       }
     } catch (e: Exception) {
-      Log.e(TAG, "Microphone recording failed", e)
-      try {
-        recorder.release()
-      } catch (_: Exception) {
+      Log.w(TAG, "Could not normalize AudioManager before voice recording: ${e.message}")
+    }
+
+    val audioSources =
+      listOf(
+        MediaRecorder.AudioSource.MIC,
+        MediaRecorder.AudioSource.VOICE_RECOGNITION,
+        MediaRecorder.AudioSource.DEFAULT,
+      )
+    val profiles =
+      listOf(
+        AUDIO_BITRATE to AUDIO_SAMPLE_RATE,
+        96_000 to 44_100,
+        64_000 to 22_050,
+      )
+
+    var startedRecorder: MediaRecorder? = null
+    var lastException: Exception? = null
+
+    outer@ for (source in audioSources) {
+      for ((bitrate, sampleRate) in profiles) {
+        val candidate = createMediaRecorder()
+        try {
+          if (cacheOutput.exists()) {
+            cacheOutput.delete()
+          }
+          candidate.apply {
+            // مسجل صوتي يدوي من المايك فقط - لا علاقة له بالمكالمات
+            setAudioSource(source)
+            setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            setAudioChannels(1)
+            setAudioEncodingBitRate(bitrate)
+            setAudioSamplingRate(sampleRate)
+            setOutputFile(cacheOutput.absolutePath)
+            prepare()
+            start()
+          }
+          startedRecorder = candidate
+          Log.i(TAG, "Voice recording started: source=$source, bitrate=$bitrate, sampleRate=$sampleRate -> $fileName")
+          break@outer
+        } catch (e: Exception) {
+          lastException = e
+          Log.w(TAG, "Voice recorder attempt failed (source=$source, rate=$sampleRate): ${e.message}")
+          try {
+            candidate.release()
+          } catch (_: Exception) {
+          }
+        }
       }
+    }
+
+    if (startedRecorder == null) {
       if (cacheOutput.exists()) {
         cacheOutput.delete()
       }
       tempOutputFile = null
       targetFileName = null
-      _lastErrorFlow.value = "تعذر بدء التسجيل من الميكروفون: ${e.localizedMessage ?: e.message}"
+      _lastErrorFlow.value =
+        "تعذر بدء التسجيل من الميكروفون: ${lastException?.localizedMessage ?: lastException?.message ?: "خطأ غير معروف"}"
       stopForegroundCompat()
       stopSelf()
       return
     }
 
-    mediaRecorder = recorder
+    mediaRecorder = startedRecorder
     recordingStartedAtMs = System.currentTimeMillis()
     _lastErrorFlow.value = null
     _activeTitleFlow.value = currentTitle
@@ -215,7 +257,7 @@ class VoiceRecorderService : Service() {
 
     if (hasValidAudio) {
       val durationMs = extractDurationMs(tempFile)
-      val savedUri = saveToVoiceNotesFolder(sourceFile = tempFile, fileName = fileName)
+      val savedUri = saveToVoiceNotesFolder(sourceFile = tempFile, fileName = fileName, durationMs = durationMs)
       VoiceNotesMetadataStore.saveTitle(applicationContext, fileName, finalTitle)
       if (CallVaultSettings.isVoiceTranscriptionEnabled(applicationContext)) {
         val note =
@@ -252,12 +294,15 @@ class VoiceRecorderService : Service() {
     stopSelf()
   }
 
-  private fun saveToVoiceNotesFolder(sourceFile: File, fileName: String): Uri {
+  private fun saveToVoiceNotesFolder(sourceFile: File, fileName: String, durationMs: Long): Uri {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
       val values =
         ContentValues().apply {
           put(MediaStore.Audio.Media.DISPLAY_NAME, fileName)
-          put(MediaStore.Audio.Media.MIME_TYPE, "audio/mpeg")
+          put(MediaStore.Audio.Media.MIME_TYPE, "audio/mp4")
+          if (durationMs > 0L) {
+            put(MediaStore.Audio.Media.DURATION, durationMs)
+          }
           put(
             MediaStore.Audio.Media.RELATIVE_PATH,
             "${Environment.DIRECTORY_MUSIC}/$VOICE_NOTES_RELATIVE_SUBFOLDER",
@@ -321,7 +366,7 @@ class VoiceRecorderService : Service() {
 
   private fun buildFileName(): String {
     val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-    return "VoiceNote_${timestamp}.mp3"
+    return "VoiceNote_${timestamp}.m4a"
   }
 
   private fun ensureNotificationChannel() {
@@ -408,8 +453,8 @@ class VoiceRecorderService : Service() {
     const val ACTION_CANCEL_VOICE_RECORDING = "com.example.action.CANCEL_VOICE_RECORDING"
     const val EXTRA_NOTE_TITLE = "extra_note_title"
 
-    const val AUDIO_BITRATE = 256_000
-    const val AUDIO_SAMPLE_RATE = 48_000
+    const val AUDIO_BITRATE = 128_000
+    const val AUDIO_SAMPLE_RATE = 44_100
     const val VOICE_NOTES_RELATIVE_SUBFOLDER = "CallVault/VoiceNotes"
 
     private val _isRecordingFlow = MutableStateFlow(false)

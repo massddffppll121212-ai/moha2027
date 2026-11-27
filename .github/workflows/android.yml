@@ -50,11 +50,18 @@ jobs:
                 -dname "CN=Android Debug,O=Android,C=US"
             fi
           fi
+          if [ ! -f app/google-services.json ] && [ -f google-services.json ]; then
+            cp google-services.json app/google-services.json
+          fi
           if [ ! -f app/google-services.json ] && [ -n "$GOOGLE_SERVICES_JSON" ]; then
             printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
           fi
+          if [ ! -f app/google-services.json ] && [ -n "${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}" ]; then
+            printf '%s' "${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}" | base64 -d > app/google-services.json
+          fi
           if [ ! -f app/google-services.json ]; then
-            echo "::warning::app/google-services.json is missing! Firebase AI transcription and Cloud Sync require app/google-services.json or the GOOGLE_SERVICES_JSON repository secret."
+            echo "::error::app/google-services.json is missing! Add app/google-services.json to the repository or set the GOOGLE_SERVICES_JSON GitHub Secret so Firebase AI transcription works."
+            exit 1
           fi
           if [ ! -f ./gradlew ]; then
             gradle wrapper --gradle-version 9.3.1

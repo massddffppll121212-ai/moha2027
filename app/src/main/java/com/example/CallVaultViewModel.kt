@@ -5,6 +5,9 @@ import android.app.Activity
 import android.content.ContentUris
 import android.content.Context
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
 import android.net.Uri
@@ -18,6 +21,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import java.io.File
+import java.io.FileInputStream
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -79,6 +83,7 @@ class CallVaultViewModel(
   val uiState: StateFlow<CallVaultUiState> = _uiState.asStateFlow()
 
   private var mediaPlayer: MediaPlayer? = null
+  private var audioFocusRequest: AudioFocusRequest? = null
   private var playbackTickerJob: Job? = null
   private var waveformExtractionJob: Job? = null
   private val waveformCache = mutableMapOf<String, List<Float>>()
@@ -532,8 +537,12 @@ class CallVaultViewModel(
     if (_uiState.value.playingItemId == null) return
     if (player.isPlaying) {
       player.pause()
+      abandonPlaybackAudioFocus()
       _uiState.update { it.copy(isPlaying = false) }
     } else {
+      prepareDeviceAudioForPlayback()
+      requestPlaybackAudioFocus()
+      player.setVolume(1.0f, 1.0f)
       player.start()
       _uiState.update { it.copy(isPlaying = true) }
       startPlaybackTicker()
@@ -559,12 +568,35 @@ class CallVaultViewModel(
 
     stopPlayback()
     try {
+      val mutedWarning = prepareDeviceAudioForPlayback()
+      requestPlaybackAudioFocus()
+
+      val playbackAttributes =
+        AudioAttributes.Builder()
+          .setUsage(AudioAttributes.USAGE_MEDIA)
+          .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+          .build()
+
       val player =
         MediaPlayer().apply {
-          setDataSource(appContext, uri)
+          setAudioAttributes(playbackAttributes)
+          configureMediaPlayerDataSource(this, uri, legacyFilePath)
           prepare()
+          setVolume(1.0f, 1.0f)
+          setOnErrorListener { _, what, extra ->
+            Log.e(TAG, "MediaPlayer playback error what=$what extra=$extra for $uri")
+            abandonPlaybackAudioFocus()
+            _uiState.update {
+              it.copy(
+                statusMessage = "تعذر تشغيل الصوت (رمز الخطأ: $what/$extra).",
+              )
+            }
+            stopPlayback()
+            true
+          }
           setOnCompletionListener {
             playbackTickerJob?.cancel()
+            abandonPlaybackAudioFocus()
             _uiState.update {
               it.copy(
                 isPlaying = false,
@@ -585,6 +617,7 @@ class CallVaultViewModel(
           playbackPositionMs = 0L,
           playbackDurationMs = player.duration.toLong().coerceAtLeast(fallbackDurationMs),
           waveformAmplitudes = initialWaveform,
+          statusMessage = mutedWarning ?: it.statusMessage,
         )
       }
       startPlaybackTicker()
@@ -607,8 +640,123 @@ class CallVaultViewModel(
           }
       }
     } catch (e: Exception) {
-      _uiState.update { it.copy(statusMessage = "تعذر تشغيل الملف: ${e.message}") }
+      Log.e(TAG, "Failed to start audio playback", e)
+      abandonPlaybackAudioFocus()
+      _uiState.update { it.copy(statusMessage = "تعذر تشغيل الملف: ${e.localizedMessage ?: e.message}") }
       stopPlayback()
+    }
+  }
+
+  private fun configureMediaPlayerDataSource(
+    player: MediaPlayer,
+    uri: Uri,
+    legacyFilePath: String?,
+  ) {
+    val legacyFile = legacyFilePath?.let { File(it) }?.takeIf { it.exists() && it.length() > 0L }
+    if (legacyFile != null) {
+      FileInputStream(legacyFile).use { fis ->
+        player.setDataSource(fis.fd)
+      }
+      return
+    }
+
+    if (uri.scheme == "file") {
+      val path = uri.path
+      if (!path.isNullOrBlank()) {
+        val file = File(path)
+        if (file.exists() && file.length() > 0L) {
+          FileInputStream(file).use { fis ->
+            player.setDataSource(fis.fd)
+          }
+          return
+        }
+      }
+    }
+
+    val pfd =
+      try {
+        appContext.contentResolver.openFileDescriptor(uri, "r")
+      } catch (_: Exception) {
+        null
+      }
+    if (pfd != null) {
+      pfd.use { descriptor ->
+        player.setDataSource(descriptor.fileDescriptor)
+      }
+      return
+    }
+
+    player.setDataSource(appContext, uri)
+  }
+
+  private fun prepareDeviceAudioForPlayback(): String? {
+    return try {
+      val am = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return null
+      if (am.mode == AudioManager.MODE_IN_COMMUNICATION || am.mode == AudioManager.MODE_RINGTONE) {
+        am.mode = AudioManager.MODE_NORMAL
+      }
+      val mediaVol = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+      if (mediaVol <= 0) {
+        "تنبيه: مستوى صوت الوسائط في الهاتف مكتوم (0). ارفع الصوت للاستماع."
+      } else {
+        null
+      }
+    } catch (e: Exception) {
+      Log.w(TAG, "Could not inspect AudioManager before playback: ${e.message}")
+      null
+    }
+  }
+
+  private fun requestPlaybackAudioFocus() {
+    try {
+      val am = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val attrs =
+          AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+        val req =
+          AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+            .setAudioAttributes(attrs)
+            .setAcceptsDelayedFocusGain(false)
+            .setOnAudioFocusChangeListener { focusChange ->
+              if (focusChange == AudioManager.AUDIOFOCUS_LOSS) {
+                mediaPlayer?.let {
+                  if (it.isPlaying) {
+                    it.pause()
+                    _uiState.update { state -> state.copy(isPlaying = false) }
+                  }
+                }
+              }
+            }
+            .build()
+        audioFocusRequest = req
+        am.requestAudioFocus(req)
+      } else {
+        @Suppress("DEPRECATION")
+        am.requestAudioFocus(
+          null,
+          AudioManager.STREAM_MUSIC,
+          AudioManager.AUDIOFOCUS_GAIN_TRANSIENT,
+        )
+      }
+    } catch (e: Exception) {
+      Log.w(TAG, "Audio focus request failed: ${e.message}")
+    }
+  }
+
+  private fun abandonPlaybackAudioFocus() {
+    try {
+      val am = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        audioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
+        audioFocusRequest = null
+      } else {
+        @Suppress("DEPRECATION")
+        am.abandonAudioFocus(null)
+      }
+    } catch (_: Exception) {
     }
   }
 
@@ -839,6 +987,7 @@ class CallVaultViewModel(
     playbackTickerJob = null
     waveformExtractionJob?.cancel()
     waveformExtractionJob = null
+    abandonPlaybackAudioFocus()
     try {
       mediaPlayer?.stop()
     } catch (_: Exception) {
@@ -928,7 +1077,7 @@ class CallVaultViewModel(
     val legacyCallsDir = CallRecordingService.getLegacyCallsDirectory(context)
     if (legacyCallsDir.exists() && legacyCallsDir.isDirectory) {
       legacyCallsDir
-        .listFiles { file -> file.isFile && file.name.endsWith(".mp3", ignoreCase = true) }
+        .listFiles { file -> file.isFile && isSupportedAudioFile(file.name) }
         ?.sortedByDescending { it.lastModified() }
         ?.forEach { file ->
           val uri = Uri.fromFile(file)
@@ -945,7 +1094,11 @@ class CallVaultViewModel(
         }
     }
 
-    return results.sortedByDescending { it.timestampMs }
+    val sorted = results.sortedByDescending { it.timestampMs }
+    for (item in sorted) {
+      repository.ensureCallRecordExists(item)
+    }
+    return sorted
   }
 
   // استعلام حصري لمجلد التسجيلات الصوتية CallVault/VoiceNotes فقط
@@ -1014,7 +1167,7 @@ class CallVaultViewModel(
     val legacyNotesDir = VoiceRecorderService.getLegacyVoiceNotesDirectory(context)
     if (legacyNotesDir.exists() && legacyNotesDir.isDirectory) {
       legacyNotesDir
-        .listFiles { file -> file.isFile && file.name.endsWith(".mp3", ignoreCase = true) }
+        .listFiles { file -> file.isFile && isSupportedAudioFile(file.name) }
         ?.sortedByDescending { it.lastModified() }
         ?.forEach { file ->
           val uri = Uri.fromFile(file)
@@ -1033,7 +1186,11 @@ class CallVaultViewModel(
         }
     }
 
-    return results.sortedByDescending { it.timestampMs }
+    val sorted = results.sortedByDescending { it.timestampMs }
+    for (note in sorted) {
+      repository.ensureVoiceNoteRecordExists(note)
+    }
+    return sorted
   }
 
   private fun buildVoiceNoteItem(
@@ -1050,7 +1207,7 @@ class CallVaultViewModel(
     val title =
       VoiceNotesMetadataStore.getTitle(context, fileName)
         ?: savedNotes[fileName]?.title?.takeIf { it.isNotBlank() }
-        ?: fileName.removeSuffix(".mp3")
+        ?: stripAudioExtension(fileName)
 
     return VoiceNoteItem(
       id = id,
@@ -1090,7 +1247,7 @@ class CallVaultViewModel(
     sizeBytes: Long,
     legacyFilePath: String? = null,
   ): CallRecordingItem {
-    val cleanName = fileName.removeSuffix(".mp3")
+    val cleanName = stripAudioExtension(fileName)
     val parts = cleanName.split("_")
     val directionTag = parts.getOrNull(1).orEmpty()
     val savedMeta = CallMetadataStore.getMetadata(appContext, fileName)
@@ -1148,6 +1305,19 @@ class CallVaultViewModel(
       sizeBytes = sizeBytes,
       legacyFilePath = legacyFilePath,
     )
+  }
+
+  private fun isSupportedAudioFile(fileName: String): Boolean {
+    val lower = fileName.lowercase()
+    return lower.endsWith(".m4a") ||
+      lower.endsWith(".mp3") ||
+      lower.endsWith(".aac") ||
+      lower.endsWith(".3gp") ||
+      lower.endsWith(".wav")
+  }
+
+  private fun stripAudioExtension(fileName: String): String {
+    return fileName.replace(Regex("\\.(m4a|mp3|aac|3gp|wav)$", RegexOption.IGNORE_CASE), "")
   }
 
   companion object {

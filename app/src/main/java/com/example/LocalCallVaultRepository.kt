@@ -113,6 +113,34 @@ class LocalCallVaultRepository private constructor(context: Context) {
     }
   }
 
+  fun ensureCallRecordExists(item: CallRecordingItem) {
+    val cleanFileName = item.fileName.trim()
+    if (cleanFileName.isEmpty()) return
+    synchronized(lock) {
+      if (!_callsFlow.value.containsKey(cleanFileName)) {
+        val record =
+          CallRecord(
+            id = "call_$cleanFileName",
+            userId = "",
+            fileName = cleanFileName,
+            callerName = item.callerName,
+            phoneNumber = item.phoneNumber,
+            direction = item.direction.name,
+            durationMs = item.durationMs,
+            recordedAtMs = item.timestampMs,
+            transcript = null,
+            summaryPoints = emptyList(),
+            actionItems = emptyList(),
+            syncedToCloud = false,
+          )
+        val updated = _callsFlow.value.toMutableMap()
+        updated[cleanFileName] = record
+        persistCalls(updated)
+        _callsFlow.value = updated
+      }
+    }
+  }
+
   fun deleteCallRecord(fileName: String) {
     val cleanFileName = fileName.trim()
     if (cleanFileName.isEmpty()) return
@@ -206,6 +234,32 @@ class LocalCallVaultRepository private constructor(context: Context) {
         }
       }
       if (changed) {
+        persistVoiceNotes(updated)
+        _voiceNotesFlow.value = updated
+      }
+    }
+  }
+
+  fun ensureVoiceNoteRecordExists(note: VoiceNoteItem) {
+    val cleanFileName = note.fileName.trim()
+    if (cleanFileName.isEmpty()) return
+    synchronized(lock) {
+      if (!_voiceNotesFlow.value.containsKey(cleanFileName)) {
+        val record =
+          VoiceNoteRecord(
+            id = "note_$cleanFileName",
+            userId = "",
+            fileName = cleanFileName,
+            title = note.title,
+            durationMs = note.durationMs,
+            recordedAtMs = note.timestampMs,
+            transcript = null,
+            summaryPoints = emptyList(),
+            actionItems = emptyList(),
+            syncedToCloud = false,
+          )
+        val updated = _voiceNotesFlow.value.toMutableMap()
+        updated[cleanFileName] = record
         persistVoiceNotes(updated)
         _voiceNotesFlow.value = updated
       }
